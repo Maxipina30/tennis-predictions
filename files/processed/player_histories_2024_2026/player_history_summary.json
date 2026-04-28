@@ -1,0 +1,11 @@
+{
+  "matches_source": "files\\processed\\atp_2026\\matches.csv",
+  "years": [
+    2026,
+    2025,
+    2024
+  ],
+  "players": 209,
+  "player_matches": 29834,
+  "errors": 0
+}

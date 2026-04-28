@@ -1,0 +1,10 @@
+{
+  "train_rows": 859,
+  "test_completed_rows": 62,
+  "test_madrid_upcoming_rows": 8,
+  "test_total_rows": 70,
+  "test_completed_tournaments": [
+    "Barcelona",
+    "Munich"
+  ]
+}

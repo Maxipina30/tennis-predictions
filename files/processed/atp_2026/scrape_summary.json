@@ -1,0 +1,14 @@
+{
+  "year": 2026,
+  "levels": [
+    "grand_slam",
+    "masters_1000",
+    "atp_500",
+    "atp_250"
+  ],
+  "completed_only": false,
+  "tournaments": 25,
+  "matches": 921,
+  "details": 921,
+  "players": 0
+}
