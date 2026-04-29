@@ -10,6 +10,17 @@ files/processed/**
 !files/processed/atp_2026/
 !files/processed/atp_2026/scrape_summary.json
 !files/processed/atp_2026/upcoming_matches.csv
+!files/processed/atp_2026/upcoming_match_details.csv
+!files/processed/atp_2025/
+!files/processed/atp_2025/scrape_summary.json
+!files/processed/atp_rankings/
+!files/processed/atp_rankings/ranking_summary.json
+!files/processed/model_dataset_2025_2026/
+!files/processed/model_dataset_2025_2026/model_dataset.summary.json
+!files/processed/model_dataset_2025_2026/split_summary.json
+!files/processed/model_training_2025_2026/
+!files/processed/model_training_2025_2026/metrics.csv
+!files/processed/model_training_2025_2026/madrid_predictions.csv
 !files/processed/model_dataset_2026/
 !files/processed/model_dataset_2026/split_summary.json
 !files/processed/model_training_2026/

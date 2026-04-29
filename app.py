@@ -7,12 +7,17 @@ import streamlit as st
 
 
 BASE = Path(__file__).parent
-MODEL_DATA = BASE / "files" / "processed" / "model_dataset_2026"
-TRAINING = BASE / "files" / "processed" / "model_training_2026"
-TEMPORAL = BASE / "files" / "processed" / "temporal_validation_2026"
+MODEL_DATA = BASE / "files" / "processed" / "model_dataset_2025_2026"
+TRAINING = BASE / "files" / "processed" / "model_training_2025_2026"
+TEMPORAL = BASE / "files" / "processed" / "temporal_validation_2025_2026"
 ATP = BASE / "files" / "processed" / "atp_2026"
+ATP_2025 = BASE / "files" / "processed" / "atp_2025"
 
 MODEL_NAME = "regresion_logistica"
+DETAIL_ODDS_FILES = [
+    ATP / "upcoming_match_details.csv",
+    ATP / "match_details.csv",
+]
 MODEL_LABEL = "Regresión logística"
 
 
@@ -20,10 +25,15 @@ st.set_page_config(page_title="Tennis Value Dashboard", layout="wide")
 
 
 @st.cache_data
-def read_csv(path: Path) -> pd.DataFrame:
+def read_csv_cached(path: Path, modified_at: float) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     return pd.read_csv(path)
+
+
+def read_csv(path: Path) -> pd.DataFrame:
+    modified_at = path.stat().st_mtime if path.exists() else 0
+    return read_csv_cached(path, modified_at)
 
 
 def to_num(series: pd.Series) -> pd.Series:
@@ -36,7 +46,9 @@ def load_predictions() -> pd.DataFrame:
     if preds.empty:
         return preds
 
+    preds["match_id"] = preds["match_id"].astype(str)
     if not upcoming.empty:
+        upcoming["match_id"] = upcoming["match_id"].astype(str)
         keep = [
             "match_id",
             "start_raw",
@@ -47,16 +59,20 @@ def load_predictions() -> pd.DataFrame:
             "match_url",
         ]
         preds = preds.merge(upcoming[[c for c in keep if c in upcoming.columns]], on="match_id", how="left")
+    detail_odds = load_detail_odds()
+    if not detail_odds.empty:
+        preds = preds.merge(detail_odds, on="match_id", how="left")
 
-    p1 = f"prob_gana_jugador_1_{MODEL_NAME}"
-    p2 = f"prob_gana_jugador_2_{MODEL_NAME}"
+    p1 = "prob_gana_jugador_1"
+    legacy_p1 = f"prob_gana_jugador_1_{MODEL_NAME}"
+    if p1 not in preds.columns and legacy_p1 in preds.columns:
+        preds[p1] = preds[legacy_p1]
     preds[p1] = to_num(preds[p1])
-    preds[p2] = to_num(preds[p2])
     preds["odds1_avg"] = to_num(preds.get("odds1_avg", pd.Series(index=preds.index)))
     preds["odds2_avg"] = to_num(preds.get("odds2_avg", pd.Series(index=preds.index)))
 
     preds["prob_modelo_j1"] = preds[p1]
-    preds["prob_modelo_j2"] = preds[p2]
+    preds["prob_modelo_j2"] = 1 - preds[p1]
     preds["prob_mercado_j1"] = implied_probability(preds["odds1_avg"], preds["odds2_avg"], side=1)
     preds["prob_mercado_j2"] = implied_probability(preds["odds1_avg"], preds["odds2_avg"], side=2)
     preds["edge_j1"] = preds["prob_modelo_j1"] - preds["prob_mercado_j1"]
@@ -70,6 +86,7 @@ def load_predictions() -> pd.DataFrame:
         axis=1,
     )
     preds["prob_favorito_modelo"] = preds[["prob_modelo_j1", "prob_modelo_j2"]].max(axis=1)
+    add_set_market_columns(preds)
     return preds.sort_values("edge_recomendado", ascending=False)
 
 
@@ -78,6 +95,43 @@ def implied_probability(odds1: pd.Series, odds2: pd.Series, side: int) -> pd.Ser
     raw2 = 1 / odds2
     total = raw1 + raw2
     return (raw1 if side == 1 else raw2) / total
+
+
+def load_detail_odds() -> pd.DataFrame:
+    frames = []
+    keep = [
+        "match_id",
+        "set_odds_player1_wins_set",
+        "set_odds_player2_wins_set",
+        "set_odds_player1_wins_2_0",
+        "set_odds_player2_wins_2_0",
+    ]
+    for path in DETAIL_ODDS_FILES:
+        frame = read_csv(path)
+        if frame.empty or "match_id" not in frame.columns:
+            continue
+        frame["match_id"] = frame["match_id"].astype(str)
+        frames.append(frame[[col for col in keep if col in frame.columns]])
+    if not frames:
+        return pd.DataFrame()
+    merged = pd.concat(frames, ignore_index=True)
+    return merged.drop_duplicates("match_id", keep="last")
+
+
+def add_set_market_columns(preds: pd.DataFrame) -> None:
+    market_map = {
+        "j1_set": ("prob_jugador_1_gana_al_menos_un_set", "set_odds_player1_wins_set"),
+        "j2_set": ("prob_jugador_2_gana_al_menos_un_set", "set_odds_player2_wins_set"),
+        "j1_2_0": ("prob_jugador_1_gana_2_0", "set_odds_player1_wins_2_0"),
+        "j2_2_0": ("prob_jugador_2_gana_2_0", "set_odds_player2_wins_2_0"),
+    }
+    for suffix, (prob_col, odds_col) in market_map.items():
+        preds[prob_col] = to_num(preds.get(prob_col, pd.Series(index=preds.index)))
+        preds[odds_col] = to_num(preds.get(odds_col, pd.Series(index=preds.index)))
+        preds[f"prob_modelo_{suffix}"] = preds[prob_col]
+        preds[f"prob_mercado_{suffix}"] = 1 / preds[odds_col]
+        preds[f"edge_{suffix}"] = preds[f"prob_modelo_{suffix}"] - preds[f"prob_mercado_{suffix}"]
+        preds[f"kelly_{suffix}"] = kelly_fraction(preds[f"prob_modelo_{suffix}"], preds[odds_col])
 
 
 def kelly_fraction(prob: pd.Series, odds: pd.Series) -> pd.Series:
@@ -103,6 +157,34 @@ def recommendation(row: pd.Series) -> str:
     return max(candidates, key=lambda item: item[0])[1]
 
 
+def build_market_rows(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    markets = [
+        ("J1 gana partido", "jugador_1", "prob_modelo_j1", "odds1_avg", "prob_mercado_j1", "edge_j1", "kelly_j1"),
+        ("J2 gana partido", "jugador_2", "prob_modelo_j2", "odds2_avg", "prob_mercado_j2", "edge_j2", "kelly_j2"),
+        ("J1 gana al menos un set", "jugador_1", "prob_modelo_j1_set", "set_odds_player1_wins_set", "prob_mercado_j1_set", "edge_j1_set", "kelly_j1_set"),
+        ("J2 gana al menos un set", "jugador_2", "prob_modelo_j2_set", "set_odds_player2_wins_set", "prob_mercado_j2_set", "edge_j2_set", "kelly_j2_set"),
+        ("J1 gana 2-0", "jugador_1", "prob_modelo_j1_2_0", "set_odds_player1_wins_2_0", "prob_mercado_j1_2_0", "edge_j1_2_0", "kelly_j1_2_0"),
+        ("J2 gana 2-0", "jugador_2", "prob_modelo_j2_2_0", "set_odds_player2_wins_2_0", "prob_mercado_j2_2_0", "edge_j2_2_0", "kelly_j2_2_0"),
+    ]
+    for _, match in df.iterrows():
+        for market, player_col, prob_col, odds_col, implied_col, edge_col, kelly_col in markets:
+            rows.append(
+                {
+                    "Hora": match.get("start_raw"),
+                    "Partido": f"{match.get('jugador_1')} vs {match.get('jugador_2')}",
+                    "Mercado": market,
+                    "Jugador": match.get(player_col),
+                    "Prob. modelo": match.get(prob_col),
+                    "Cuota": match.get(odds_col),
+                    "Prob. cuota": match.get(implied_col),
+                    "Edge": match.get(edge_col),
+                    "Kelly": match.get(kelly_col),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def metric_card(label: str, value: str) -> None:
     st.metric(label, value)
 
@@ -118,6 +200,10 @@ def style_recommendations(df: pd.DataFrame) -> pd.DataFrame:
     for col in [
         "prob_modelo_j1",
         "prob_modelo_j2",
+        "prob_modelo_j1_set",
+        "prob_modelo_j2_set",
+        "prob_modelo_j1_2_0",
+        "prob_modelo_j2_2_0",
         "prob_mercado_j1",
         "prob_mercado_j2",
         "edge_j1",
@@ -127,6 +213,16 @@ def style_recommendations(df: pd.DataFrame) -> pd.DataFrame:
     ]:
         if col in display.columns:
             display[col] = display[col].map(format_pct)
+    return display
+
+
+def style_market_table(df: pd.DataFrame) -> pd.DataFrame:
+    display = df.copy()
+    for col in ["Prob. modelo", "Prob. cuota", "Edge", "Kelly"]:
+        if col in display.columns:
+            display[col] = display[col].map(format_pct)
+    if "Cuota" in display.columns:
+        display["Cuota"] = display["Cuota"].map(lambda value: "" if pd.isna(value) else f"{value:.2f}")
     return display
 
 
@@ -182,12 +278,36 @@ def recommendations_view() -> None:
     main_table = main_table.rename(columns=main_columns)
     st.dataframe(main_table, use_container_width=True, hide_index=True)
 
+    st.subheader("Mercados derivados")
+    market_rows = build_market_rows(df)
+    min_edge = st.session_state.get("min_edge", 0.05)
+    value_rows = market_rows[
+        market_rows["Cuota"].notna()
+        & market_rows["Edge"].notna()
+        & (market_rows["Edge"] >= min_edge)
+        & (market_rows["Kelly"] > 0)
+    ].sort_values("Edge", ascending=False)
+    if value_rows.empty:
+        st.caption("Sin value detectado en mercados derivados con cuotas disponibles.")
+    else:
+        st.dataframe(style_market_table(value_rows), use_container_width=True, hide_index=True)
+    with st.expander("Ver todos los mercados"):
+        st.dataframe(
+            style_market_table(market_rows.sort_values(["Partido", "Mercado"])),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     with st.expander("Ver probabilidades completas"):
         detail_columns = {
             "jugador_1": "Jugador 1",
             "jugador_2": "Jugador 2",
             "prob_modelo_j1": "Prob. modelo J1",
             "prob_modelo_j2": "Prob. modelo J2",
+            "prob_modelo_j1_set": "Prob. J1 gana set",
+            "prob_modelo_j2_set": "Prob. J2 gana set",
+            "prob_modelo_j1_2_0": "Prob. J1 2-0",
+            "prob_modelo_j2_2_0": "Prob. J2 2-0",
             "prob_mercado_j1": "Prob. mercado J1",
             "prob_mercado_j2": "Prob. mercado J2",
             "kelly_j1": "Kelly J1",
@@ -248,20 +368,24 @@ def models_view() -> None:
 
 def data_view() -> None:
     split_summary = read_json(MODEL_DATA / "split_summary.json")
-    history_summary = read_json(BASE / "files" / "processed" / "player_histories_2024_2026" / "player_history_summary.json")
+    dataset_summary = read_json(MODEL_DATA / "model_dataset.summary.json")
+    ranking_summary = read_json(BASE / "files" / "processed" / "atp_rankings" / "ranking_summary.json")
     scrape_summary = read_json(ATP / "scrape_summary.json")
+    scrape_2025_summary = read_json(ATP_2025 / "scrape_summary.json")
     c1, c2, c3 = st.columns(3)
     c1.metric("Train", split_summary.get("train_rows", 0))
     c2.metric("Test", split_summary.get("test_total_rows", 0))
-    c3.metric("Historial jugadores", history_summary.get("player_matches", 0))
+    c3.metric("Historial jugadores", dataset_summary.get("history_rows", 0))
 
     st.subheader("Resumen de datos")
     summary_rows = [
+        {"Concepto": "Torneos ATP 2025", "Valor": scrape_2025_summary.get("tournaments", 0)},
+        {"Concepto": "Partidos ATP 2025", "Valor": scrape_2025_summary.get("matches", 0)},
         {"Concepto": "Torneos ATP 2026", "Valor": scrape_summary.get("tournaments", 0)},
         {"Concepto": "Partidos ATP 2026", "Valor": scrape_summary.get("matches", 0)},
-        {"Concepto": "Detalles scrapeados", "Valor": scrape_summary.get("details", 0)},
-        {"Concepto": "Jugadores con historial", "Valor": history_summary.get("players", 0)},
-        {"Concepto": "Filas de historial", "Valor": history_summary.get("player_matches", 0)},
+        {"Concepto": "Jugadores con ranking ATP", "Valor": ranking_summary.get("history_players", 0)},
+        {"Concepto": "Filas de historial", "Valor": dataset_summary.get("history_rows", 0)},
+        {"Concepto": "Filas de ranking", "Valor": dataset_summary.get("ranking_rows", 0)},
         {"Concepto": "Partidos próximos Madrid", "Valor": split_summary.get("test_madrid_upcoming_rows", 0)},
     ]
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
@@ -281,6 +405,7 @@ def format_metrics(df: pd.DataFrame) -> pd.DataFrame:
         return df
     labels = {
         "model": "Modelo",
+        "target": "Target",
         "train_accuracy": "Accuracy train",
         "test_accuracy": "Accuracy test",
         "train_log_loss": "Log loss train",
@@ -299,7 +424,7 @@ def format_metrics(df: pd.DataFrame) -> pd.DataFrame:
         }
     )
     for col in out.columns:
-        if col != "Modelo":
+        if col not in {"Modelo", "Target"}:
             out[col] = pd.to_numeric(out[col], errors="coerce").round(3)
     return out
 

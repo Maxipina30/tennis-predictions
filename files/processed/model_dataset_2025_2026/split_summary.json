@@ -1,0 +1,13 @@
+{
+  "train_rows": 3426,
+  "test_completed_rows": 70,
+  "test_madrid_upcoming_rows": 4,
+  "test_total_rows": 74,
+  "test_completed_tournaments": [
+    "Barcelona",
+    "Madrid",
+    "Munich"
+  ],
+  "injury_rows": 974,
+  "ranking_rows": 142388
+}

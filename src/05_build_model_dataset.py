@@ -5,6 +5,7 @@ import csv
 import json
 import math
 import re
+from bisect import bisect_right
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -30,6 +31,7 @@ LEVEL_WEIGHTS = {
     "itf": 25.0,
     "unknown": 100.0,
 }
+UNSEEDED_SEED_VALUE = 64
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -60,6 +62,12 @@ def parse_date(value: str | None) -> datetime | None:
         except ValueError:
             pass
     return None
+
+
+def days_between(start: datetime | None, end: datetime | None) -> int | None:
+    if not start or not end:
+        return None
+    return max((end.date() - start.date()).days, 0)
 
 
 def to_float(value: object) -> float | None:
@@ -187,6 +195,7 @@ class PlayerState:
     straight_set_losses: int = 0
     by_year: dict[int, "PlayerState"] = field(default_factory=dict)
     by_surface: dict[str, "PlayerState"] = field(default_factory=dict)
+    by_category: dict[str, "PlayerState"] = field(default_factory=dict)
     by_year_surface: dict[tuple[int, str], "PlayerState"] = field(default_factory=dict)
     recent: deque[dict] = field(default_factory=lambda: deque(maxlen=20))
     last_match_date: datetime | None = None
@@ -198,6 +207,9 @@ class PlayerState:
     def child_surface(self, surface: str) -> "PlayerState":
         return self.by_surface.setdefault(surface, PlayerState())
 
+    def child_category(self, category: str) -> "PlayerState":
+        return self.by_category.setdefault(category, PlayerState())
+
     def child_year_surface(self, year: int, surface: str) -> "PlayerState":
         return self.by_year_surface.setdefault((year, surface), PlayerState())
 
@@ -208,26 +220,28 @@ class PlayerState:
             f"{prefix}_partidos_previos": self.matches,
             f"{prefix}_porcentaje_victorias_previas": rate(self.wins, self.matches),
             f"{prefix}_porcentaje_victorias_ponderado_nivel": rate(self.weighted_wins, self.weighted_matches),
-            f"{prefix}_diferencia_promedio_games": rate(self.games_for - self.games_against, self.matches),
-            f"{prefix}_diferencia_promedio_sets": rate(self.sets_for - self.sets_against, self.matches),
+            f"{prefix}_margen_promedio_games": rate(self.games_for - self.games_against, self.matches),
+            f"{prefix}_margen_promedio_sets": rate(self.sets_for - self.sets_against, self.matches),
             f"{prefix}_porcentaje_tiebreaks_ganados": rate(self.tiebreaks_won, self.tiebreaks_played),
             f"{prefix}_tiebreaks_previos": self.tiebreaks_played,
             f"{prefix}_porcentaje_victorias_sets_corridos": rate(self.straight_set_wins, self.matches),
             f"{prefix}_porcentaje_derrotas_sets_corridos": rate(self.straight_set_losses, self.matches),
             f"{prefix}_porcentaje_victorias_ultimos_5": rate(sum(r["won"] for r in recent_5), len(recent_5)),
             f"{prefix}_porcentaje_victorias_ultimos_10": rate(sum(r["won"] for r in recent_10), len(recent_10)),
-            f"{prefix}_diferencia_games_ultimos_10": (
+            f"{prefix}_margen_games_ultimos_10": (
                 sum(r["game_diff"] for r in recent_10) / len(recent_10) if recent_10 else None
             ),
         }
 
-    def snapshot(self, prefix: str, match_date: datetime, year: int, surface: str, tournament: str) -> dict:
+    def snapshot(self, prefix: str, match_date: datetime, year: int, surface: str, category: str, tournament: str) -> dict:
         row = self.snapshot_core(prefix)
         year_state = self.by_year.get(year, PlayerState())
         surface_state = self.by_surface.get(surface, PlayerState())
+        category_state = self.by_category.get(category, PlayerState())
         year_surface_state = self.by_year_surface.get((year, surface), PlayerState())
         row.update(year_state.snapshot_core(f"{prefix}_ano_actual"))
         row.update(surface_state.snapshot_core(f"{prefix}_superficie"))
+        row.update(category_state.snapshot_core(f"{prefix}_categoria_torneo"))
         row.update(year_surface_state.snapshot_core(f"{prefix}_ano_actual_superficie"))
 
         if self.last_match_date:
@@ -241,8 +255,9 @@ class PlayerState:
         row[f"{prefix}_sets_ultimos_7_dias"] = sum(r["sets"] for r in recent_7)
 
         prior_round = self.tournament_rounds.get((year - 1, tournament))
-        row[f"{prefix}_ronda_mismo_torneo_ano_anterior"] = prior_round
-        row[f"{prefix}_defendia_titulo"] = int(prior_round == ROUND_ORDER["F"]) if prior_round is not None else None
+        row[f"{prefix}_jugo_mismo_torneo_ano_anterior"] = int(prior_round is not None)
+        row[f"{prefix}_ronda_mismo_torneo_ano_anterior"] = prior_round or 0
+        row[f"{prefix}_defendia_titulo"] = int(prior_round == ROUND_ORDER["F"])
         return row
 
     def update(self, event: dict, side: int) -> None:
@@ -278,7 +293,7 @@ class PlayerState:
         key = (year, tournament)
         self.tournament_rounds[key] = max(self.tournament_rounds.get(key, 0), round_value)
 
-        for child in (self.child_year(year), self.child_surface(surface), self.child_year_surface(year, surface)):
+        for child in (self.child_year(year), self.child_surface(surface), self.child_category(category), self.child_year_surface(year, surface)):
             child.update_without_children(event, side, weight, won, games_for, games_against, sets_for, sets_against, tb_won, tb_lost)
 
     def update_without_children(self, event: dict, side: int, weight: float, won: bool, games_for: int, games_against: int, sets_for: int, sets_against: int, tb_won: int, tb_lost: int) -> None:
@@ -421,8 +436,113 @@ def diff_columns(row: dict, left: str, right: str, names: list[str]) -> None:
         row[f"diferencia_{name}"] = None if a is None or b is None else a - b
 
 
-def build_rows_for_events(target_events: list[dict], history_events: list[dict]) -> list[dict]:
+def build_injury_index(injury_rows: list[dict]) -> dict[str, list[dict]]:
+    injuries_by_player: dict[str, list[dict]] = defaultdict(list)
+    for row in injury_rows:
+        player_key = player_key_from_url(row.get("player_url"))
+        start = parse_date(row.get("start_date"))
+        if not player_key or not start:
+            continue
+        end = parse_date(row.get("end_date"))
+        duration = to_int(row.get("duration_days"))
+        if duration is None:
+            duration = days_between(start, end)
+        injuries_by_player[player_key].append(
+            {
+                "start": start,
+                "end": end,
+                "duration_days": duration,
+                "reason": row.get("reason") or "",
+            }
+        )
+    for injuries in injuries_by_player.values():
+        injuries.sort(key=lambda injury: (injury["start"], injury["reason"]))
+    return injuries_by_player
+
+
+def injury_snapshot(injuries: list[dict], prefix: str, match_date: datetime) -> dict:
+    prior = [injury for injury in injuries if injury["start"].date() < match_date.date()]
+    current_year = [injury for injury in prior if injury["start"].year == match_date.year]
+    completed_current_year = [injury for injury in current_year if injury.get("duration_days") is not None]
+    active = [
+        injury
+        for injury in prior
+        if injury["start"].date() < match_date.date()
+        and (injury.get("end") is None or injury["end"].date() >= match_date.date())
+    ]
+    last_injury = prior[-1] if prior else None
+    last_reference_date = None
+    if last_injury:
+        last_reference_date = last_injury.get("end") or last_injury["start"]
+
+    return {
+        f"{prefix}_lesiones_ano_actual": len(current_year),
+        f"{prefix}_dias_lesionado_ano_actual": sum(injury["duration_days"] for injury in completed_current_year),
+        f"{prefix}_lesion_abierta": int(bool(active)),
+        f"{prefix}_dias_desde_ultima_lesion": (
+            max((match_date.date() - last_reference_date.date()).days, 0) if last_reference_date else None
+        ),
+    }
+
+
+def build_ranking_index(ranking_rows: list[dict]) -> dict[str, list[tuple[datetime, dict]]]:
+    rankings_by_player: dict[str, list[tuple[datetime, dict]]] = defaultdict(list)
+    for row in ranking_rows:
+        player_key = row.get("player_key") or player_key_from_url(row.get("player_url"))
+        rank_date = parse_date(row.get("rank_date"))
+        if not player_key or not rank_date or not row.get("singles_rank"):
+            continue
+        rankings_by_player[player_key].append((rank_date, row))
+    for rankings in rankings_by_player.values():
+        rankings.sort(key=lambda item: item[0])
+    return rankings_by_player
+
+
+def ranking_as_of(rankings: list[tuple[datetime, dict]], match_date: datetime) -> dict:
+    if not rankings:
+        return {"rank": None, "points": None, "race_rank": None, "race_points": None, "rank_date": "", "log_rank": None}
+    dates = [item[0].date() for item in rankings]
+    index = bisect_right(dates, match_date.date()) - 1
+    if index < 0:
+        return {"rank": None, "points": None, "race_rank": None, "race_points": None, "rank_date": "", "log_rank": None}
+    rank_date, row = rankings[index]
+    rank = to_int(row.get("singles_rank"))
+    return {
+        "rank": rank,
+        "points": to_int(row.get("singles_points")),
+        "race_rank": to_int(row.get("race_rank")),
+        "race_points": to_int(row.get("race_points")),
+        "rank_date": rank_date.date().isoformat(),
+        "log_rank": math.log(rank) if rank and rank > 0 else None,
+    }
+
+
+def ranking_snapshot(
+    rankings_by_player: dict[str, list[tuple[datetime, dict]]],
+    player_key: str,
+    prefix: str,
+    match_date: datetime,
+) -> dict:
+    ranking = ranking_as_of(rankings_by_player.get(player_key, []), match_date)
+    return {
+        f"{prefix}_ranking": ranking["rank"],
+        f"{prefix}_ranking_log": ranking["log_rank"],
+        f"{prefix}_puntos_ranking": ranking["points"],
+        f"{prefix}_ranking_race": ranking["race_rank"],
+        f"{prefix}_puntos_race": ranking["race_points"],
+        f"{prefix}_ranking_fecha": ranking["rank_date"],
+    }
+
+
+def build_rows_for_events(
+    target_events: list[dict],
+    history_events: list[dict],
+    injury_rows: list[dict] | None = None,
+    ranking_rows: list[dict] | None = None,
+) -> list[dict]:
     states: dict[str, PlayerState] = defaultdict(PlayerState)
+    injuries_by_player = build_injury_index(injury_rows or [])
+    rankings_by_player = build_ranking_index(ranking_rows or [])
     h2h: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: defaultdict(int))
     history_index = 0
     rows: list[dict] = []
@@ -455,6 +575,9 @@ def build_rows_for_events(target_events: list[dict], history_events: list[dict])
             "jugador_2": event["player2"],
             "sembrado_jugador_1": event["seed1"],
             "sembrado_jugador_2": event["seed2"],
+            "jugador_1_tiene_sembrado": int(event["seed1"] is not None),
+            "jugador_2_tiene_sembrado": int(event["seed2"] is not None),
+            "diferencia_tiene_sembrado": int(event["seed1"] is not None) - int(event["seed2"] is not None),
             "diferencia_sembrado": seed_diff(event["seed1"], event["seed2"]),
             "partidos_previos_entre_ellos": prior_h2h[p1] + prior_h2h[p2],
             "victorias_previas_jugador_1_vs_jugador_2": prior_h2h[p1],
@@ -466,42 +589,81 @@ def build_rows_for_events(target_events: list[dict], history_events: list[dict])
             "games_jugador_1": event["games1"],
             "games_jugador_2": event["games2"],
         }
-        row.update(states[p1].snapshot("jugador_1", event["date"], event["date"].year, event["surface"], event["tournament"]))
-        row.update(states[p2].snapshot("jugador_2", event["date"], event["date"].year, event["surface"], event["tournament"]))
+        row.update(states[p1].snapshot("jugador_1", event["date"], event["date"].year, event["surface"], event["category"], event["tournament"]))
+        row.update(states[p2].snapshot("jugador_2", event["date"], event["date"].year, event["surface"], event["category"], event["tournament"]))
+        row.update(injury_snapshot(injuries_by_player.get(p1, []), "jugador_1", event["date"]))
+        row.update(injury_snapshot(injuries_by_player.get(p2, []), "jugador_2", event["date"]))
+        row.update(ranking_snapshot(rankings_by_player, p1, "jugador_1", event["date"]))
+        row.update(ranking_snapshot(rankings_by_player, p2, "jugador_2", event["date"]))
+        diff_columns(
+            row,
+            "jugador_1",
+            "jugador_2",
+            [
+                "ranking",
+                "ranking_log",
+                "puntos_ranking",
+                "ranking_race",
+                "puntos_race",
+            ],
+        )
         diff_columns(
             row,
             "jugador_1",
             "jugador_2",
             [
                 "porcentaje_victorias_previas",
+                "partidos_previos",
                 "porcentaje_victorias_ponderado_nivel",
-                "diferencia_promedio_games",
-                "diferencia_promedio_sets",
+                "margen_promedio_games",
+                "margen_promedio_sets",
                 "porcentaje_tiebreaks_ganados",
+                "tiebreaks_previos",
                 "porcentaje_victorias_ultimos_10",
-                "diferencia_games_ultimos_10",
+                "margen_games_ultimos_10",
                 "porcentaje_victorias_sets_corridos",
                 "porcentaje_derrotas_sets_corridos",
                 "dias_descanso",
                 "games_ultimos_7_dias",
+                "jugo_mismo_torneo_ano_anterior",
                 "ronda_mismo_torneo_ano_anterior",
                 "superficie_porcentaje_victorias_previas",
+                "superficie_partidos_previos",
+                "categoria_torneo_porcentaje_victorias_previas",
+                "categoria_torneo_partidos_previos",
+                "categoria_torneo_margen_promedio_games",
+                "categoria_torneo_margen_promedio_sets",
+                "categoria_torneo_porcentaje_victorias_ultimos_10",
                 "ano_actual_porcentaje_victorias_previas",
+                "ano_actual_partidos_previos",
                 "ano_actual_superficie_porcentaje_victorias_previas",
+                "ano_actual_superficie_partidos_previos",
+                "lesiones_ano_actual",
+                "dias_lesionado_ano_actual",
+                "lesion_abierta",
+                "dias_desde_ultima_lesion",
             ],
         )
         rows.append(row)
     return rows
 
 
-def build_dataset(matches_path: Path, histories_path: Path, output_path: Path) -> None:
+def build_dataset(
+    matches_path: Path,
+    histories_path: Path,
+    output_path: Path,
+    injuries_path: Path | None = None,
+    rankings_path: Path | None = None,
+) -> None:
     matches = read_csv(matches_path)
     player_matches = read_csv(histories_path)
+    injuries = read_csv(injuries_path) if injuries_path else []
+    rankings = read_csv(rankings_path) if rankings_path else []
     tournament_categories = {row.get("source_url", ""): row.get("category", "") for row in matches}
     history_events = build_history_events(player_matches, tournament_categories)
     target_events = build_target_events(matches)
 
-    rows = build_rows_for_events(target_events, history_events)
+    rows = build_rows_for_events(target_events, history_events, injuries, rankings)
 
     write_csv(output_path, rows)
     output_path.with_suffix(".summary.json").write_text(
@@ -510,6 +672,8 @@ def build_dataset(matches_path: Path, histories_path: Path, output_path: Path) -
                 "matches": len(matches),
                 "history_rows": len(player_matches),
                 "history_events": len(history_events),
+                "injury_rows": len(injuries),
+                "ranking_rows": len(rankings),
                 "model_rows": len(rows),
             },
             indent=2,
@@ -521,8 +685,8 @@ def build_dataset(matches_path: Path, histories_path: Path, output_path: Path) -
 def seed_diff(seed1: int | None, seed2: int | None) -> int | None:
     if seed1 is None and seed2 is None:
         return None
-    value1 = seed1 if seed1 is not None else 999
-    value2 = seed2 if seed2 is not None else 999
+    value1 = min(seed1, UNSEEDED_SEED_VALUE) if seed1 is not None else UNSEEDED_SEED_VALUE
+    value2 = min(seed2, UNSEEDED_SEED_VALUE) if seed2 is not None else UNSEEDED_SEED_VALUE
     return value2 - value1
 
 
@@ -530,9 +694,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build chronological no-leakage model dataset.")
     parser.add_argument("--matches", default="files/processed/atp_2026/matches.csv")
     parser.add_argument("--histories", default="files/processed/player_histories_2024_2026/player_matches.csv")
+    parser.add_argument("--injuries", default="files/processed/player_histories_2024_2026/player_injuries.csv")
+    parser.add_argument("--rankings", default="files/processed/atp_rankings/player_ranking_history.csv")
     parser.add_argument("--out", default="files/processed/model_dataset_2026/model_dataset.csv")
     args = parser.parse_args()
-    build_dataset(Path(args.matches), Path(args.histories), Path(args.out))
+    injuries_path = Path(args.injuries)
+    rankings_path = Path(args.rankings)
+    build_dataset(
+        Path(args.matches),
+        Path(args.histories),
+        Path(args.out),
+        injuries_path if injuries_path.exists() else None,
+        rankings_path if rankings_path.exists() else None,
+    )
 
 
 if __name__ == "__main__":

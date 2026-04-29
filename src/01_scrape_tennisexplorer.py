@@ -248,7 +248,18 @@ def classify_tournament(name: str) -> str | None:
         return "masters_1000"
     if normalized in ATP_500:
         return "atp_500"
-    if normalized in {"davis cup", "united cup", "laver cup", "next gen atp finals", "atp finals"}:
+    if normalized in {
+        "davis cup",
+        "united cup",
+        "laver cup",
+        "next gen atp finals",
+        "atp finals",
+        "masters cup atp",
+        "six kings slam",
+        "world university games",
+    }:
+        return None
+    if any(marker in normalized for marker in ("exhibition", "invitational", "league", "championship")):
         return None
     return "atp_250"
 
@@ -277,7 +288,7 @@ def discover_calendar_tournaments(html: str, year: int, levels: tuple[str, ...],
         row = link.find_parent("tr")
         row_text = clean_text(row.get_text(" ", strip=True)) if row else ""
         cells = [clean_text(cell.get_text(" ", strip=True)) for cell in row.find_all("td")] if row else []
-        singles_winner = cells[5] if len(cells) >= 6 else ""
+        singles_winner = cells[-1] if cells else ""
         if completed_only and singles_winner in {"", "-"}:
             continue
         start_date = None
@@ -285,8 +296,11 @@ def discover_calendar_tournaments(html: str, year: int, levels: tuple[str, ...],
         if date_match:
             start_date = f"{date_match.group(1)}{year}"
         draw_size = None
-        if len(cells) >= 5:
-            draw_size = to_int(cells[4])
+        for cell in reversed(cells[:-1]):
+            value = to_int(cell)
+            if value is not None:
+                draw_size = value
+                break
 
         rows.append(
             {
@@ -408,7 +422,7 @@ def parse_next_matches(html: str, url: str) -> tuple[dict, list[dict]]:
         return metadata, rows
 
     for row in table.select("tbody tr"):
-        cells = row.find_all("td")
+        cells = row.find_all("td", recursive=False)
         if len(cells) < 7:
             continue
         matchup_link = cells[2].find("a", href=True)
@@ -507,7 +521,7 @@ def parse_record_blocks(lines: list[str], owner: str) -> list[dict]:
     return records
 
 
-def parse_player_profile(html: str, url: str) -> tuple[dict, list[dict], list[dict]]:
+def parse_player_profile(html: str, url: str) -> tuple[dict, list[dict], list[dict], list[dict]]:
     soup = BeautifulSoup(html, "html.parser")
     lines = text_lines(soup)
     title = clean_text(soup.find("h1").get_text(" ", strip=True)) if soup.find("h1") else ""
@@ -531,7 +545,56 @@ def parse_player_profile(html: str, url: str) -> tuple[dict, list[dict], list[di
 
     records = parse_record_blocks(lines, player)
     played_matches = parse_player_played_matches_table(soup, player)
-    return profile, records, played_matches
+    injuries = parse_player_injuries_table(soup, player)
+    return profile, records, played_matches, injuries
+
+
+def parse_injury_date(value: str) -> str | None:
+    value = clean_text(value)
+    match = re.match(r"^(\d{2})\.(\d{2})\.(\d{4})$", value)
+    if not match:
+        return None
+    day, month, year = map(int, match.groups())
+    return datetime(year, month, day).date().isoformat()
+
+
+def injury_duration_days(start_iso: str | None, end_iso: str | None) -> int | None:
+    if not start_iso or not end_iso:
+        return None
+    start = datetime.strptime(start_iso, "%Y-%m-%d").date()
+    end = datetime.strptime(end_iso, "%Y-%m-%d").date()
+    return max((end - start).days, 0)
+
+
+def parse_player_injuries_table(soup: BeautifulSoup, player: str) -> list[dict]:
+    injuries: list[dict] = []
+    table = soup.select_one("table#playerInjuries")
+    if not table:
+        return injuries
+
+    for row in table.select("tbody tr"):
+        cells = row.find_all("td", recursive=False)
+        if len(cells) < 3:
+            continue
+        date_range = clean_text(cells[0].get_text(" ", strip=True))
+        start_raw, separator, end_raw = date_range.partition(" - ")
+        start_date = parse_injury_date(start_raw)
+        end_date = None if not separator or end_raw == "?" else parse_injury_date(end_raw)
+        tournament_link = cells[1].find("a", href=True)
+        injuries.append(
+            {
+                "player": player,
+                "start_raw": start_raw,
+                "end_raw": end_raw if separator else "",
+                "start_date": start_date,
+                "end_date": end_date,
+                "duration_days": injury_duration_days(start_date, end_date),
+                "tournament": clean_text(tournament_link.get_text(" ", strip=True)) if tournament_link else clean_text(cells[1].get_text(" ", strip=True)),
+                "tournament_url": urljoin(BASE_URL, tournament_link["href"]) if tournament_link else None,
+                "reason": clean_text(cells[2].get_text(" ", strip=True)),
+            }
+        )
+    return injuries
 
 
 def parse_player_played_matches_table(soup: BeautifulSoup, player: str) -> list[dict]:
@@ -676,6 +739,7 @@ def parse_match_detail(html: str, url: str) -> tuple[dict, list[dict]]:
 
     detail.update(parse_surface_snapshot(lines))
     detail.update(parse_homeaway_average_odds(lines))
+    detail.update(parse_set_market_odds(soup))
     bookmaker_rows = parse_homeaway_bookmakers(lines, url)
     return detail, bookmaker_rows
 
@@ -687,6 +751,162 @@ def parse_homeaway_average_odds(lines: list[str]) -> dict[str, float | None]:
             result["homeaway_avg_odds1"] = to_float(lines[i + 1])
             result["homeaway_avg_odds2"] = to_float(lines[i + 2])
             break
+    return result
+
+
+def odds_cell_value(cell: Tag | None) -> float | None:
+    if cell is None:
+        return None
+    odds = cell.select_one(".odds-in")
+    if odds:
+        text = "".join(str(node) for node in odds.children if not isinstance(node, Tag))
+    else:
+        text = cell.get_text(" ", strip=True)
+    match = re.search(r"\d+(?:\.\d+)?", clean_text(text))
+    return float(match.group(0)) if match else None
+
+
+def max_odds(values: Iterable[float | None]) -> float | None:
+    clean_values = [value for value in values if value is not None]
+    return max(clean_values) if clean_values else None
+
+
+def average_or_max_odds(average_value: float | None, values: Iterable[float | None]) -> float | None:
+    return average_value if average_value is not None else max_odds(values)
+
+
+def direct_table_rows(table: Tag) -> list[Tag]:
+    body = next((child for child in table.children if isinstance(child, Tag) and child.name == "tbody"), None)
+    parent = body or table
+    return [child for child in parent.children if isinstance(child, Tag) and child.name == "tr"]
+
+
+def direct_cell_by_class(row: Tag, class_name: str) -> Tag | None:
+    for child in row.children:
+        if isinstance(child, Tag) and child.name == "td" and class_name in child.get("class", []):
+            return child
+    return None
+
+
+def direct_cells(row: Tag) -> list[Tag]:
+    return [child for child in row.children if isinstance(child, Tag) and child.name == "td"]
+
+
+def is_average_odds_row(row: Tag) -> bool:
+    if "average" in row.get("class", []):
+        return True
+    cells = direct_cells(row)
+    return bool(cells and clean_text(cells[0].get_text(" ", strip=True)).lower() == "average odds")
+
+
+def parse_set_market_odds(soup: BeautifulSoup) -> dict[str, float | None]:
+    return {
+        **parse_asian_set_handicap_odds(soup),
+        **parse_correct_score_odds(soup),
+    }
+
+
+def parse_asian_set_handicap_odds(soup: BeautifulSoup) -> dict[str, float | str | None]:
+    result = {
+        "set_odds_player1_wins_set": None,
+        "set_odds_player2_wins_set": None,
+        "set_odds_handicap_player1": None,
+        "set_odds_handicap_player2": None,
+        "set_odds_table_player1_minus_1_5": None,
+        "set_odds_table_player2_minus_1_5": None,
+        "set_odds_table_player1_plus_1_5": None,
+        "set_odds_table_player2_plus_1_5": None,
+    }
+    table = soup.select_one("#oddsMenu-3-data table.result")
+    if not table:
+        return result
+
+    current_market = ""
+    odds_player1_wins_set: list[float | None] = []
+    odds_player2_wins_set: list[float | None] = []
+    avg_player1_wins_set = None
+    avg_player2_wins_set = None
+    for row in direct_table_rows(table):
+        if "odds-type" in row.get("class", []):
+            current_market = clean_text(row.get_text(" ", strip=True)).lower()
+            continue
+        if "set" not in current_market:
+            continue
+        cells = direct_cells(row)
+        cell_texts = [clean_text(cell.get_text(" ", strip=True)) for cell in cells]
+        if (
+            len(cell_texts) >= 4
+            and cell_texts[1].lower() == "handicap"
+            and result["set_odds_handicap_player1"] is None
+        ):
+            result["set_odds_handicap_player1"] = cell_texts[2]
+            result["set_odds_handicap_player2"] = cell_texts[3]
+            continue
+        value_cell = direct_cell_by_class(row, "value")
+        odds1_cell = direct_cell_by_class(row, "k1")
+        odds2_cell = direct_cell_by_class(row, "k2")
+        if value_cell is None or odds1_cell is None or odds2_cell is None:
+            continue
+        handicap = to_float(value_cell.get_text(" ", strip=True))
+        is_average = is_average_odds_row(row)
+        if handicap == -1.5:
+            value1 = odds_cell_value(odds1_cell)
+            value2 = odds_cell_value(odds2_cell)
+            odds_player1_wins_set.append(value1)
+            if is_average:
+                avg_player1_wins_set = value1
+                result["set_odds_table_player1_minus_1_5"] = value1
+                result["set_odds_table_player2_minus_1_5"] = value2
+        elif handicap == 1.5:
+            value1 = odds_cell_value(odds1_cell)
+            value2 = odds_cell_value(odds2_cell)
+            odds_player2_wins_set.append(value2)
+            if is_average:
+                avg_player2_wins_set = value2
+                result["set_odds_table_player1_plus_1_5"] = value1
+                result["set_odds_table_player2_plus_1_5"] = value2
+
+    result["set_odds_player1_wins_set"] = average_or_max_odds(avg_player1_wins_set, odds_player1_wins_set)
+    result["set_odds_player2_wins_set"] = average_or_max_odds(avg_player2_wins_set, odds_player2_wins_set)
+    return result
+
+
+def parse_correct_score_odds(soup: BeautifulSoup) -> dict[str, float | None]:
+    result = {
+        "set_odds_player1_wins_2_0": None,
+        "set_odds_player2_wins_2_0": None,
+    }
+    table = soup.select_one("#oddsMenu-4-data table.result")
+    if not table:
+        return result
+
+    current_market = ""
+    player1_2_0: list[float | None] = []
+    player2_2_0: list[float | None] = []
+    avg_player1_2_0 = None
+    avg_player2_2_0 = None
+    for row in direct_table_rows(table):
+        if "odds-type" in row.get("class", []):
+            current_market = clean_text(row.get_text(" ", strip=True)).lower()
+            continue
+        if not current_market.startswith("correct score"):
+            continue
+        odds_cell = direct_cell_by_class(row, "k1")
+        if odds_cell is None:
+            continue
+        is_average = is_average_odds_row(row)
+        value = odds_cell_value(odds_cell)
+        if "2:0" in current_market:
+            player1_2_0.append(value)
+            if is_average:
+                avg_player1_2_0 = value
+        elif "0:2" in current_market:
+            player2_2_0.append(value)
+            if is_average:
+                avg_player2_2_0 = value
+
+    result["set_odds_player1_wins_2_0"] = average_or_max_odds(avg_player1_2_0, player1_2_0)
+    result["set_odds_player2_wins_2_0"] = average_or_max_odds(avg_player2_2_0, player2_2_0)
     return result
 
 
@@ -769,6 +989,7 @@ def scrape_tournament_data(
     profiles: list[dict] = []
     records: list[dict] = []
     played_matches: list[dict] = []
+    injuries: list[dict] = []
     if fetch_players:
         player_urls = sorted(
             {
@@ -786,10 +1007,13 @@ def scrape_tournament_data(
             player_urls = player_urls[:max_players]
         for player_url in player_urls:
             player_html = client.get_html(player_url)
-            profile, player_records, player_matches = parse_player_profile(player_html, player_url)
+            profile, player_records, player_matches, player_injuries = parse_player_profile(player_html, player_url)
             profiles.append(profile)
             records.extend(player_records)
             played_matches.extend(player_matches)
+            for injury in player_injuries:
+                injury["player_url"] = player_url
+                injuries.append(injury)
 
     return {
         "metadata": metadata,
@@ -800,6 +1024,7 @@ def scrape_tournament_data(
         "player_profiles": profiles,
         "player_surface_records": records,
         "player_played_matches": played_matches,
+        "player_injuries": injuries,
     }
 
 
@@ -826,6 +1051,7 @@ def scrape(config: ScrapeConfig) -> None:
     write_csv(config.output_dir / "player_profiles.csv", scraped["player_profiles"])
     write_csv(config.output_dir / "player_surface_records.csv", scraped["player_surface_records"])
     write_csv(config.output_dir / "player_played_matches.csv", scraped["player_played_matches"])
+    write_csv(config.output_dir / "player_injuries.csv", scraped["player_injuries"])
 
 
 def scrape_batch(config: BatchScrapeConfig) -> None:
@@ -852,6 +1078,7 @@ def scrape_batch(config: BatchScrapeConfig) -> None:
     all_profiles: dict[str, dict] = {}
     all_records: list[dict] = []
     all_played_matches: list[dict] = []
+    all_injuries: list[dict] = []
     player_urls: set[str] = set()
     errors: list[dict] = []
 
@@ -913,10 +1140,13 @@ def scrape_batch(config: BatchScrapeConfig) -> None:
         for index, player_url in enumerate(urls_to_fetch, start=1):
             print(f"[player {index}/{len(urls_to_fetch)}] {player_url}")
             player_html = client.get_html(player_url)
-            profile, player_records, player_matches = parse_player_profile(player_html, player_url)
+            profile, player_records, player_matches, player_injuries = parse_player_profile(player_html, player_url)
             all_profiles[profile["player_url"]] = profile
             all_records.extend(player_records)
             all_played_matches.extend(player_matches)
+            for injury in player_injuries:
+                injury["player_url"] = player_url
+                all_injuries.append(injury)
 
     write_csv(config.output_dir / "tournament_metadata.csv", all_metadata)
     write_csv(config.output_dir / "matches.csv", all_matches)
@@ -926,6 +1156,7 @@ def scrape_batch(config: BatchScrapeConfig) -> None:
     write_csv(config.output_dir / "player_profiles.csv", all_profiles.values())
     write_csv(config.output_dir / "player_surface_records.csv", all_records)
     write_csv(config.output_dir / "player_played_matches.csv", all_played_matches)
+    write_csv(config.output_dir / "player_injuries.csv", all_injuries)
     write_csv(config.output_dir / "scrape_errors.csv", errors)
 
     summary = {

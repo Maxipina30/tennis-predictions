@@ -35,12 +35,15 @@ def annual_url(player_url: str, year: int) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", urlencode({"annual": year}), ""))
 
 
-def unique_player_urls(matches_path: Path) -> list[str]:
+def unique_player_urls(matches_path: Path, existing_profiles_path: Path | None = None) -> list[str]:
     urls: set[str] = set()
     for row in read_csv(matches_path):
         for key in ("player1_url", "player2_url"):
             if row.get(key):
                 urls.add(row[key])
+    if existing_profiles_path and existing_profiles_path.exists():
+        existing = {row.get("player_url") for row in read_csv(existing_profiles_path)}
+        urls = {url for url in urls if url not in existing}
     return sorted(urls)
 
 
@@ -58,16 +61,19 @@ def scrape_histories(
     years: list[int],
     delay: float,
     max_players: int | None,
+    existing_profiles_path: Path | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     client = TennisExplorerClient(delay_seconds=delay)
-    player_urls = unique_player_urls(matches_path)
+    player_urls = unique_player_urls(matches_path, existing_profiles_path)
     if max_players:
         player_urls = player_urls[:max_players]
 
     profiles_by_url: dict[str, dict] = {}
     surface_records: list[dict] = []
     player_matches: list[dict] = []
+    player_injuries: list[dict] = []
+    seen_injuries: set[tuple[str, str, str, str]] = set()
     errors: list[dict] = []
 
     for player_index, player_url in enumerate(player_urls, start=1):
@@ -76,7 +82,7 @@ def scrape_histories(
             url = annual_url(player_url, year)
             try:
                 html = client.get_html(url)
-                profile, records, matches = parse_player_profile(html, url)
+                profile, records, matches, injuries = parse_player_profile(html, url)
                 profile["player_url"] = player_url
                 profiles_by_url[player_url] = profile
                 for record in records:
@@ -87,6 +93,18 @@ def scrape_histories(
                     match["annual_year"] = year
                     match["date_iso"] = parse_match_date(match.get("date"), year)
                     player_matches.append(match)
+                for injury in injuries:
+                    key = (
+                        player_url,
+                        injury.get("start_date") or injury.get("start_raw") or "",
+                        injury.get("end_date") or injury.get("end_raw") or "",
+                        injury.get("reason") or "",
+                    )
+                    if key in seen_injuries:
+                        continue
+                    seen_injuries.add(key)
+                    injury["player_url"] = player_url
+                    player_injuries.append(injury)
             except Exception as exc:
                 print(f"[history skipped] {url}: {exc}")
                 errors.append({"player_url": player_url, "year": year, "error": str(exc)})
@@ -94,6 +112,7 @@ def scrape_histories(
         write_csv(output_dir / "player_profiles.csv", profiles_by_url.values())
         write_csv(output_dir / "player_surface_records.csv", surface_records)
         write_csv(output_dir / "player_matches.csv", player_matches)
+        write_csv(output_dir / "player_injuries.csv", player_injuries)
         write_csv(output_dir / "player_history_errors.csv", errors)
 
     summary = {
@@ -101,6 +120,7 @@ def scrape_histories(
         "years": years,
         "players": len(player_urls),
         "player_matches": len(player_matches),
+        "player_injuries": len(player_injuries),
         "errors": len(errors),
     }
     (output_dir / "player_history_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -123,6 +143,11 @@ def main() -> None:
     parser.add_argument("--years", nargs="+", type=int, default=[2026, 2025])
     parser.add_argument("--delay", type=float, default=0.8)
     parser.add_argument("--max-players", type=int, default=None)
+    parser.add_argument(
+        "--skip-existing-profiles",
+        default=None,
+        help="Optional player_profiles.csv path; players already present there are not scraped again.",
+    )
     args = parser.parse_args()
     scrape_histories(
         matches_path=Path(args.matches),
@@ -130,6 +155,7 @@ def main() -> None:
         years=args.years,
         delay=args.delay,
         max_players=args.max_players,
+        existing_profiles_path=Path(args.skip_existing_profiles) if args.skip_existing_profiles else None,
     )
 
 

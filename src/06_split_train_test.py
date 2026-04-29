@@ -80,6 +80,7 @@ def swap_completed_row(row: dict) -> dict:
     simple_pairs = [
         ("jugador_1", "jugador_2"),
         ("sembrado_jugador_1", "sembrado_jugador_2"),
+        ("jugador_1_tiene_sembrado", "jugador_2_tiene_sembrado"),
         ("sets_jugador_1", "sets_jugador_2"),
         ("games_jugador_1", "games_jugador_2"),
         ("victorias_previas_jugador_1_vs_jugador_2", "victorias_previas_jugador_2_vs_jugador_1"),
@@ -106,6 +107,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Split model dataset into train/test and add Madrid upcoming rows.")
     parser.add_argument("--dataset", default="files/processed/model_dataset_2026/model_dataset.csv")
     parser.add_argument("--histories", default="files/processed/player_histories_2024_2026/player_matches.csv")
+    parser.add_argument("--injuries", default="files/processed/player_histories_2024_2026/player_injuries.csv")
+    parser.add_argument("--rankings", default="files/processed/atp_rankings/player_ranking_history.csv")
     parser.add_argument("--matches", default="files/processed/atp_2026/matches.csv")
     parser.add_argument("--upcoming", default="files/processed/atp_2026/upcoming_matches.csv")
     parser.add_argument("--profiles", default="files/processed/player_histories_2024_2026/player_profiles.csv")
@@ -116,18 +119,34 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     rows = read_csv(Path(args.dataset))
     test_tournaments = {"Barcelona", "Munich"}
-    test_rows = orient_completed_rows([row for row in rows if row.get("torneo") in test_tournaments])
+    test_rows = orient_completed_rows(
+        [
+            row
+            for row in rows
+            if (
+                row.get("torneo") in test_tournaments
+                and row.get("fecha", "") >= "2026-04-13"
+            )
+            or (
+                row.get("torneo") == "Madrid"
+                and row.get("fecha", "") >= "2026-04-28"
+                and row.get("target_gana_jugador_1") in {"0", "1", 0, 1}
+            )
+        ]
+    )
     train_rows = orient_completed_rows(
         [row for row in rows if row.get("torneo") not in test_tournaments and row.get("fecha", "") < "2026-04-13"]
     )
 
     histories = read_csv(Path(args.histories))
+    injuries = read_csv(Path(args.injuries))
+    rankings = read_csv(Path(args.rankings))
     matches = read_csv(Path(args.matches))
     tournament_categories = {row.get("source_url", ""): row.get("category", "") for row in matches}
     history_events = model_dataset.build_history_events(histories, tournament_categories)
     name_to_key = build_name_key_lookup(read_csv(Path(args.profiles)))
     upcoming_events = model_dataset.build_upcoming_events(read_csv(Path(args.upcoming)), args.upcoming_date, name_to_key)
-    upcoming_rows = model_dataset.build_rows_for_events(upcoming_events, history_events)
+    upcoming_rows = model_dataset.build_rows_for_events(upcoming_events, history_events, injuries, rankings)
 
     write_csv(out_dir / "train.csv", train_rows)
     write_csv(out_dir / "test_barcelona_munich.csv", test_rows)
@@ -138,7 +157,9 @@ def main() -> None:
         "test_completed_rows": len(test_rows),
         "test_madrid_upcoming_rows": len(upcoming_rows),
         "test_total_rows": len(test_rows) + len(upcoming_rows),
-        "test_completed_tournaments": sorted(test_tournaments),
+        "test_completed_tournaments": sorted(test_tournaments | {"Madrid"}),
+        "injury_rows": len(injuries),
+        "ranking_rows": len(rankings),
     }
     (out_dir / "split_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 

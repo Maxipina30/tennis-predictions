@@ -1,0 +1,15 @@
+{
+  "year": 2025,
+  "levels": [
+    "grand_slam",
+    "masters_1000",
+    "atp_500",
+    "atp_250"
+  ],
+  "completed_only": true,
+  "tournaments": 59,
+  "matches": 2629,
+  "upcoming_matches": 0,
+  "details": 0,
+  "players": 0
+}
