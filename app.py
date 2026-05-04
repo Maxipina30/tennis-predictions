@@ -12,13 +12,14 @@ TRAINING = BASE / "files" / "processed" / "model_training_2025_2026"
 TEMPORAL = BASE / "files" / "processed" / "temporal_validation_2025_2026"
 ATP = BASE / "files" / "processed" / "atp_2026"
 ATP_2025 = BASE / "files" / "processed" / "atp_2025"
+ROME_QUALY = BASE / "files" / "processed" / "rome_2026_qualy"
 
 MODEL_NAME = "regresion_logistica"
 DETAIL_ODDS_FILES = [
     ATP / "upcoming_match_details.csv",
     ATP / "match_details.csv",
 ]
-MODEL_LABEL = "Regresión logística"
+MODEL_LABEL = "Regresion logistica"
 
 
 st.set_page_config(page_title="Tennis Value Dashboard", layout="wide")
@@ -90,6 +91,50 @@ def load_predictions() -> pd.DataFrame:
     return preds.sort_values("edge_recomendado", ascending=False)
 
 
+def load_rome_qualy_predictions() -> pd.DataFrame:
+    df = read_csv(ROME_QUALY / "qualy_predictions.csv")
+    if df.empty:
+        return df
+
+    numeric_cols = [
+        "prob_gana_jugador_1",
+        "prob_gana_jugador_2",
+        "odds_jugador_1",
+        "odds_jugador_2",
+        "cuota_justa_jugador_1",
+        "cuota_justa_jugador_2",
+        "ev_jugador_1",
+        "ev_jugador_2",
+        "jugador_1_ranking",
+        "jugador_2_ranking",
+        "jugador_1_partidos_previos",
+        "jugador_2_partidos_previos",
+        "jugador_1_superficie_partidos_previos",
+        "jugador_2_superficie_partidos_previos",
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = to_num(df[col])
+
+    df["ganador_modelo"] = df.apply(
+        lambda row: row["jugador_1"] if row["prob_gana_jugador_1"] >= row["prob_gana_jugador_2"] else row["jugador_2"],
+        axis=1,
+    )
+    df["prob_ganador_modelo"] = df[["prob_gana_jugador_1", "prob_gana_jugador_2"]].max(axis=1)
+    df["favorito_cuotas"] = df.apply(
+        lambda row: row["jugador_1"] if row["odds_jugador_1"] <= row["odds_jugador_2"] else row["jugador_2"],
+        axis=1,
+    )
+    df["alineado_cuotas"] = df["ganador_modelo"] == df["favorito_cuotas"]
+    df["mejor_ev"] = df[["ev_jugador_1", "ev_jugador_2"]].max(axis=1)
+    df[["recomendacion_apuesta", "motivo_recomendacion"]] = df.apply(
+        qualy_recommendation,
+        axis=1,
+        result_type="expand",
+    )
+    return df.sort_values(["recomendacion_apuesta", "mejor_ev"], ascending=[True, False])
+
+
 def implied_probability(odds1: pd.Series, odds2: pd.Series, side: int) -> pd.Series:
     raw1 = 1 / odds1
     raw2 = 1 / odds2
@@ -155,6 +200,38 @@ def recommendation(row: pd.Series) -> str:
     if not candidates:
         return "Sin apuesta"
     return max(candidates, key=lambda item: item[0])[1]
+
+
+def qualy_recommendation(row: pd.Series) -> tuple[str, str]:
+    candidates = [
+        (1, row.get("jugador_1"), row.get("prob_gana_jugador_1"), row.get("odds_jugador_1"), row.get("cuota_justa_jugador_1"), row.get("ev_jugador_1")),
+        (2, row.get("jugador_2"), row.get("prob_gana_jugador_2"), row.get("odds_jugador_2"), row.get("cuota_justa_jugador_2"), row.get("ev_jugador_2")),
+    ]
+    side, player, prob, odds, fair_odds, ev = max(candidates, key=lambda item: item[5] if pd.notna(item[5]) else -999)
+    if pd.isna(ev) or pd.isna(prob) or pd.isna(odds) or pd.isna(fair_odds):
+        return "Sin apuesta", "Faltan cuotas o probabilidad del modelo."
+
+    rank = row.get(f"jugador_{side}_ranking")
+    prior = row.get(f"jugador_{side}_partidos_previos")
+    clay_prior = row.get(f"jugador_{side}_superficie_partidos_previos")
+    flags = []
+    if pd.isna(rank) or rank >= 10000:
+        flags.append("ranking faltante")
+    if pd.notna(prior) and prior < 25:
+        flags.append("poco historial total")
+    if pd.notna(clay_prior) and clay_prior < 10:
+        flags.append("poco historial en clay")
+    if prob < 0.54:
+        flags.append("probabilidad ajustada")
+    if row.get("ganador_modelo") != row.get("favorito_cuotas"):
+        flags.append("va contra mercado")
+
+    value_text = f"{player}: cuota {odds:.2f} > cuota justa {fair_odds:.2f}, EV {ev:.1%}, prob. modelo {prob:.1%}"
+    if ev >= 0.08 and prob >= 0.54 and len(flags) <= 2:
+        return f"Apostar {player}", value_text + ("; " + ", ".join(flags) if flags else ".")
+    if ev >= 0.08:
+        return f"Solo stake chico {player}", value_text + "; " + ", ".join(flags)
+    return "Sin apuesta", f"No hay edge suficiente. Mejor EV: {value_text}."
 
 
 def build_market_rows(df: pd.DataFrame) -> pd.DataFrame:
@@ -233,15 +310,15 @@ def friendly_table(df: pd.DataFrame, columns: dict[str, str]) -> pd.DataFrame:
 
 def main() -> None:
     st.title("Tennis Predictions")
-    st.caption("Modelo operativo: Regresión logística v1. Las cuotas se usan solo para evaluar value, no como feature de entrenamiento.")
+    st.caption("Modelo operativo: Regresion logistica v1. Las cuotas se usan solo para evaluar value, no como feature de entrenamiento.")
 
-    st.sidebar.header("Parámetros")
-    st.session_state["min_edge"] = st.sidebar.slider("Edge mínimo", 0.00, 0.20, 0.05, 0.01)
-    st.session_state["max_kelly"] = st.sidebar.slider("Stake máximo sugerido", 0.01, 0.10, 0.05, 0.01)
-    page = st.sidebar.radio("Vista", ["Recomendaciones", "Modelos", "Datos"])
+    st.sidebar.header("Parametros")
+    st.session_state["min_edge"] = st.sidebar.slider("Edge minimo", 0.00, 0.20, 0.05, 0.01)
+    st.session_state["max_kelly"] = st.sidebar.slider("Stake maximo sugerido", 0.01, 0.10, 0.05, 0.01)
+    page = st.sidebar.radio("Vista", ["Roma qualy", "Modelos", "Datos"])
 
-    if page == "Recomendaciones":
-        recommendations_view()
+    if page == "Roma qualy":
+        rome_qualy_view()
     elif page == "Modelos":
         models_view()
     else:
@@ -256,7 +333,7 @@ def recommendations_view() -> None:
 
     bets = df[df["recomendacion"] != "Sin apuesta"]
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Partidos Madrid", len(df))
+    c1.metric("Partidos", len(df))
     c2.metric("Recomendaciones", len(bets))
     c3.metric("Mejor edge", format_pct(df["edge_recomendado"].max()))
     c4.metric("Modelo", MODEL_LABEL)
@@ -272,7 +349,7 @@ def recommendations_view() -> None:
         "prob_favorito_modelo": "Prob. favorito",
         "edge_j1": "Edge J1",
         "edge_j2": "Edge J2",
-        "recomendacion": "Recomendación",
+        "recomendacion": "Recomendacion",
     }
     main_table = style_recommendations(friendly_table(df, main_columns).rename(columns={v: k for k, v in main_columns.items()}))
     main_table = main_table.rename(columns=main_columns)
@@ -329,13 +406,13 @@ def recommendations_view() -> None:
         st.metric("Edge", format_pct(row["edge_j1"]))
         st.metric("Victorias previas", f"{row.get('jugador_1_porcentaje_victorias_previas', 0):.1%}")
         st.metric("Victorias superficie", f"{row.get('jugador_1_superficie_porcentaje_victorias_previas', 0):.1%}")
-        with st.expander("Más datos"):
+        with st.expander("Mas datos"):
             st.write(
                 {
                     "Partidos previos": int(row.get("jugador_1_partidos_previos", 0)),
-                    "Victorias últimos 10": format_pct(row.get("jugador_1_porcentaje_victorias_ultimos_10")),
+                    "Victorias ultimos 10": format_pct(row.get("jugador_1_porcentaje_victorias_ultimos_10")),
                     "Tiebreaks ganados": format_pct(row.get("jugador_1_porcentaje_tiebreaks_ganados")),
-                    "Días descanso": row.get("jugador_1_dias_descanso"),
+                    "Dias descanso": row.get("jugador_1_dias_descanso"),
                 }
             )
     with right:
@@ -345,15 +422,79 @@ def recommendations_view() -> None:
         st.metric("Edge", format_pct(row["edge_j2"]))
         st.metric("Victorias previas", f"{row.get('jugador_2_porcentaje_victorias_previas', 0):.1%}")
         st.metric("Victorias superficie", f"{row.get('jugador_2_superficie_porcentaje_victorias_previas', 0):.1%}")
-        with st.expander("Más datos"):
+        with st.expander("Mas datos"):
             st.write(
                 {
                     "Partidos previos": int(row.get("jugador_2_partidos_previos", 0)),
-                    "Victorias últimos 10": format_pct(row.get("jugador_2_porcentaje_victorias_ultimos_10")),
+                    "Victorias ultimos 10": format_pct(row.get("jugador_2_porcentaje_victorias_ultimos_10")),
                     "Tiebreaks ganados": format_pct(row.get("jugador_2_porcentaje_tiebreaks_ganados")),
-                    "Días descanso": row.get("jugador_2_dias_descanso"),
+                    "Dias descanso": row.get("jugador_2_dias_descanso"),
                 }
             )
+
+
+def rome_qualy_view() -> None:
+    df = load_rome_qualy_predictions()
+    if df.empty:
+        st.warning("No hay predicciones de Roma qualy disponibles.")
+        return
+
+    bets = df[df["recomendacion_apuesta"].str.startswith("Apostar", na=False)]
+    small = df[df["recomendacion_apuesta"].str.startswith("Solo stake chico", na=False)]
+    aligned = int(df["alineado_cuotas"].sum())
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Partidos Roma qualy", len(df))
+    c2.metric("Alineados con cuotas", f"{aligned}/{len(df)}")
+    c3.metric("Apuestas", len(bets))
+    c4.metric("Stake chico", len(small))
+
+    st.subheader("Todos los partidos")
+    table = df.copy()
+    table["prob_gana_jugador_1"] = table["prob_gana_jugador_1"].map(format_pct)
+    table["prob_gana_jugador_2"] = table["prob_gana_jugador_2"].map(format_pct)
+    table["prob_ganador_modelo"] = table["prob_ganador_modelo"].map(format_pct)
+    table["ev_jugador_1"] = table["ev_jugador_1"].map(format_pct)
+    table["ev_jugador_2"] = table["ev_jugador_2"].map(format_pct)
+    for col in ["odds_jugador_1", "odds_jugador_2", "cuota_justa_jugador_1", "cuota_justa_jugador_2"]:
+        table[col] = table[col].map(lambda value: "" if pd.isna(value) else f"{value:.2f}")
+    display_columns = {
+        "fecha": "Fecha",
+        "ronda": "Ronda",
+        "jugador_1": "Jugador 1",
+        "jugador_2": "Jugador 2",
+        "prob_gana_jugador_1": "Prob. J1",
+        "prob_gana_jugador_2": "Prob. J2",
+        "odds_jugador_1": "Cuota real J1",
+        "odds_jugador_2": "Cuota real J2",
+        "cuota_justa_jugador_1": "Cuota justa J1",
+        "cuota_justa_jugador_2": "Cuota justa J2",
+        "ganador_modelo": "Ganador modelo",
+        "prob_ganador_modelo": "Prob. ganador",
+        "favorito_cuotas": "Favorito cuotas",
+        "ev_jugador_1": "EV J1",
+        "ev_jugador_2": "EV J2",
+        "recomendacion_apuesta": "Recomendacion",
+        "motivo_recomendacion": "Por que",
+    }
+    st.dataframe(
+        friendly_table(table, display_columns),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Datos de soporte"):
+        support_columns = {
+            "jugador_1": "Jugador 1",
+            "jugador_1_ranking": "Ranking J1",
+            "jugador_1_partidos_previos": "Partidos previos J1",
+            "jugador_1_superficie_partidos_previos": "Partidos clay J1",
+            "jugador_2": "Jugador 2",
+            "jugador_2_ranking": "Ranking J2",
+            "jugador_2_partidos_previos": "Partidos previos J2",
+            "jugador_2_superficie_partidos_previos": "Partidos clay J2",
+            "alineado_cuotas": "Alineado con cuotas",
+        }
+        st.dataframe(friendly_table(df, support_columns), use_container_width=True, hide_index=True)
 
 
 def models_view() -> None:
@@ -361,9 +502,9 @@ def models_view() -> None:
     temporal = read_csv(TEMPORAL / "metrics.csv")
     st.subheader("Split Barcelona + Munich")
     st.dataframe(format_metrics(metrics), use_container_width=True, hide_index=True)
-    st.subheader("Validación temporal: Monte Carlo + Barcelona + Munich")
+    st.subheader("Validacion temporal: Monte Carlo + Barcelona + Munich")
     st.dataframe(format_metrics(temporal), use_container_width=True, hide_index=True)
-    st.info("Usamos regresión logística por estabilidad y menor sobreajuste. Random Forest queda como candidato alternativo para futuras calibraciones.")
+    st.info("Usamos regresion logistica por estabilidad y menor sobreajuste. Random Forest queda como candidato alternativo para futuras calibraciones.")
 
 
 def data_view() -> None:
@@ -386,7 +527,7 @@ def data_view() -> None:
         {"Concepto": "Jugadores con ranking ATP", "Valor": ranking_summary.get("history_players", 0)},
         {"Concepto": "Filas de historial", "Valor": dataset_summary.get("history_rows", 0)},
         {"Concepto": "Filas de ranking", "Valor": dataset_summary.get("ranking_rows", 0)},
-        {"Concepto": "Partidos próximos Madrid", "Valor": split_summary.get("test_madrid_upcoming_rows", 0)},
+        {"Concepto": "Partidos proximos Roma qualy", "Valor": len(read_csv(ROME_QUALY / "qualy_predictions.csv"))},
     ]
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
@@ -418,7 +559,7 @@ def format_metrics(df: pd.DataFrame) -> pd.DataFrame:
     out = df[[col for col in labels if col in df.columns]].rename(columns=labels).copy()
     out["Modelo"] = out["Modelo"].replace(
         {
-            "regresion_logistica": "Regresión logística",
+            "regresion_logistica": "Regresion logistica",
             "random_forest": "Random Forest",
             "gradient_boosting": "Gradient Boosting",
         }

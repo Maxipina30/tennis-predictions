@@ -16,12 +16,17 @@ import cloudscraper
 ATP_RANKING_HISTORY_URL = "https://www.atptour.com/es/-/www/rank/history/{player_id}"
 ATP_PLAYER_SEARCH_URL = "https://www.atptour.com/es/-/www/players/find/byname/{query}/es"
 MANUAL_ATP_IDS = {
+    "basile-54647": ("b0vx", "Pierluigi Basile"),
     "bautista-agut": ("bd06", "Roberto Bautista Agut"),
+    "bondioli": ("b0pe", "Federico Bondioli"),
     "carballes-baena": ("cf59", "Roberto Carballes Baena"),
+    "carboni-ecd4c": ("c0ow", "Lorenzo Carboni"),
     "carreno-busta": ("cd85", "Pablo Carreno Busta"),
     "de-minaur": ("dh58", "Alex de Minaur"),
     "garin": ("gd64", "Cristian Garin"),
     "ramos-vinolas": ("r772", "Albert Ramos-Vinolas"),
+    "travaglia": ("ta12", "Stefano Travaglia"),
+    "vasami-a02e2": ("v0j1", "Jacopo Vasami"),
     "zayid": ("ac39", "Mubarak Shannan Zayid"),
 }
 
@@ -102,7 +107,8 @@ def load_players(profiles_path: Path) -> list[dict]:
 
 
 def resolve_player_id(scraper: cloudscraper.CloudScraper, player_name: str) -> tuple[str, str]:
-    for query in query_variants(player_name):
+    variants = query_variants(player_name)
+    for query_index, query in enumerate(variants):
         response = scraper.get(ATP_PLAYER_SEARCH_URL.format(query=quote(query)), timeout=30)
         response.raise_for_status()
         candidates = response.json()
@@ -111,7 +117,7 @@ def resolve_player_id(scraper: cloudscraper.CloudScraper, player_name: str) -> t
             full_name = f"{candidate.get('FirstName', '')} {candidate.get('LastName', '')}".strip()
             if all_tokens_match(player_name, full_name) or all_tokens_match(query, full_name):
                 return str(candidate["PlayerId"]).lower(), full_name
-        if candidates:
+        if candidates and query_index == 0 and len(normalize_name(player_name).split()) <= 1:
             candidate = candidates[0]
             full_name = f"{candidate.get('FirstName', '')} {candidate.get('LastName', '')}".strip()
             return str(candidate["PlayerId"]).lower(), full_name

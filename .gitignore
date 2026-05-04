@@ -30,3 +30,6 @@ files/processed/**
 !files/processed/player_histories_2024_2026/player_history_summary.json
 !files/processed/temporal_validation_2026/
 !files/processed/temporal_validation_2026/metrics.csv
+!files/processed/rome_2026_qualy/
+!files/processed/rome_2026_qualy/qualy_predictions.csv
+!files/processed/rome_2026_qualy/upcoming_matches.csv

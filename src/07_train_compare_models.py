@@ -31,6 +31,14 @@ DROP_COLUMNS = {
 }
 CATEGORICAL_COLUMNS = ["categoria_torneo", "superficie", "ronda"]
 LOGISTIC_NUMERIC_PREFIXES = ("diferencia_", "partidos_previos_entre_ellos")
+LOGISTIC_EXCLUDED_COLUMNS = {
+    "diferencia_log_partidos_previos",
+    "diferencia_partidos_previos",
+    "diferencia_superficie_partidos_previos",
+    "diferencia_categoria_torneo_partidos_previos",
+    "diferencia_ano_actual_partidos_previos",
+    "diferencia_ano_actual_superficie_partidos_previos",
+}
 TARGETS = {
     "gana_jugador_1": "Gana jugador 1",
     "jugador_1_gana_2_0": "Jugador 1 gana 2-0",
@@ -130,7 +138,11 @@ def make_preprocessor(numeric: list[str], categorical: list[str], scale_numeric:
 
 
 def logistic_columns(numeric: list[str]) -> list[str]:
-    return [col for col in numeric if col.startswith(LOGISTIC_NUMERIC_PREFIXES)]
+    return [
+        col
+        for col in numeric
+        if col.startswith(LOGISTIC_NUMERIC_PREFIXES) and col not in LOGISTIC_EXCLUDED_COLUMNS
+    ]
 
 
 def build_logistic_model(numeric: list[str], categorical: list[str]) -> Pipeline:

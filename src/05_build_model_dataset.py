@@ -32,6 +32,8 @@ LEVEL_WEIGHTS = {
     "unknown": 100.0,
 }
 UNSEEDED_SEED_VALUE = 64
+MISSING_RANK_VALUE = 10000
+MISSING_POINTS_VALUE = 0
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -218,6 +220,7 @@ class PlayerState:
         recent_10 = list(self.recent)[-10:]
         return {
             f"{prefix}_partidos_previos": self.matches,
+            f"{prefix}_log_partidos_previos": math.log1p(self.matches),
             f"{prefix}_porcentaje_victorias_previas": rate(self.wins, self.matches),
             f"{prefix}_porcentaje_victorias_ponderado_nivel": rate(self.weighted_wins, self.weighted_matches),
             f"{prefix}_margen_promedio_games": rate(self.games_for - self.games_against, self.matches),
@@ -500,20 +503,39 @@ def build_ranking_index(ranking_rows: list[dict]) -> dict[str, list[tuple[dateti
 
 def ranking_as_of(rankings: list[tuple[datetime, dict]], match_date: datetime) -> dict:
     if not rankings:
-        return {"rank": None, "points": None, "race_rank": None, "race_points": None, "rank_date": "", "log_rank": None}
+        return {
+            "rank": MISSING_RANK_VALUE,
+            "points": MISSING_POINTS_VALUE,
+            "race_rank": MISSING_RANK_VALUE,
+            "race_points": MISSING_POINTS_VALUE,
+            "rank_date": "",
+            "log_rank": math.log(MISSING_RANK_VALUE),
+            "has_ranking": 0,
+        }
     dates = [item[0].date() for item in rankings]
     index = bisect_right(dates, match_date.date()) - 1
     if index < 0:
-        return {"rank": None, "points": None, "race_rank": None, "race_points": None, "rank_date": "", "log_rank": None}
+        return {
+            "rank": MISSING_RANK_VALUE,
+            "points": MISSING_POINTS_VALUE,
+            "race_rank": MISSING_RANK_VALUE,
+            "race_points": MISSING_POINTS_VALUE,
+            "rank_date": "",
+            "log_rank": math.log(MISSING_RANK_VALUE),
+            "has_ranking": 0,
+        }
     rank_date, row = rankings[index]
     rank = to_int(row.get("singles_rank"))
+    if rank is None:
+        rank = MISSING_RANK_VALUE
     return {
         "rank": rank,
-        "points": to_int(row.get("singles_points")),
-        "race_rank": to_int(row.get("race_rank")),
-        "race_points": to_int(row.get("race_points")),
+        "points": to_int(row.get("singles_points")) or MISSING_POINTS_VALUE,
+        "race_rank": to_int(row.get("race_rank")) or MISSING_RANK_VALUE,
+        "race_points": to_int(row.get("race_points")) or MISSING_POINTS_VALUE,
         "rank_date": rank_date.date().isoformat(),
         "log_rank": math.log(rank) if rank and rank > 0 else None,
+        "has_ranking": 1,
     }
 
 
@@ -531,6 +553,7 @@ def ranking_snapshot(
         f"{prefix}_ranking_race": ranking["race_rank"],
         f"{prefix}_puntos_race": ranking["race_points"],
         f"{prefix}_ranking_fecha": ranking["rank_date"],
+        f"{prefix}_tiene_ranking": ranking["has_ranking"],
     }
 
 
@@ -605,6 +628,7 @@ def build_rows_for_events(
                 "puntos_ranking",
                 "ranking_race",
                 "puntos_race",
+                "tiene_ranking",
             ],
         )
         diff_columns(
@@ -614,6 +638,7 @@ def build_rows_for_events(
             [
                 "porcentaje_victorias_previas",
                 "partidos_previos",
+                "log_partidos_previos",
                 "porcentaje_victorias_ponderado_nivel",
                 "margen_promedio_games",
                 "margen_promedio_sets",
@@ -629,15 +654,19 @@ def build_rows_for_events(
                 "ronda_mismo_torneo_ano_anterior",
                 "superficie_porcentaje_victorias_previas",
                 "superficie_partidos_previos",
+                "superficie_log_partidos_previos",
                 "categoria_torneo_porcentaje_victorias_previas",
                 "categoria_torneo_partidos_previos",
+                "categoria_torneo_log_partidos_previos",
                 "categoria_torneo_margen_promedio_games",
                 "categoria_torneo_margen_promedio_sets",
                 "categoria_torneo_porcentaje_victorias_ultimos_10",
                 "ano_actual_porcentaje_victorias_previas",
                 "ano_actual_partidos_previos",
+                "ano_actual_log_partidos_previos",
                 "ano_actual_superficie_porcentaje_victorias_previas",
                 "ano_actual_superficie_partidos_previos",
+                "ano_actual_superficie_log_partidos_previos",
                 "lesiones_ano_actual",
                 "dias_lesionado_ano_actual",
                 "lesion_abierta",
