@@ -39,12 +39,46 @@ LOGISTIC_EXCLUDED_COLUMNS = {
     "diferencia_ano_actual_partidos_previos",
     "diferencia_ano_actual_superficie_partidos_previos",
 }
+STABLE_LOGISTIC_COLUMNS = {
+    "diferencia_ranking_log",
+    "diferencia_puntos_ranking",
+    "diferencia_tiene_ranking",
+    "diferencia_margen_promedio_sets",
+    "diferencia_margen_promedio_games",
+    "diferencia_margen_games_ultimos_10",
+    "diferencia_ano_actual_porcentaje_victorias_previas",
+    "diferencia_ano_actual_log_partidos_previos",
+    "diferencia_ano_actual_superficie_log_partidos_previos",
+    "diferencia_ano_actual_superficie_porcentaje_victorias_previas",
+    "diferencia_superficie_log_partidos_previos",
+    "diferencia_superficie_porcentaje_victorias_previas",
+    "diferencia_h2h_previo",
+    "diferencia_tiebreaks_previos",
+    "diferencia_dias_descanso",
+    "diferencia_tiene_sembrado",
+    "diferencia_sembrado",
+    "diferencia_sofascore_aces_promedio",
+    "diferencia_sofascore_double_faults_promedio",
+    "diferencia_sofascore_first_serve_pct_promedio",
+    "diferencia_sofascore_first_serve_points_won_pct_promedio",
+    "diferencia_sofascore_second_serve_points_won_pct_promedio",
+    "diferencia_sofascore_service_points_won_pct_promedio",
+    "diferencia_sofascore_receiving_points_won_pct_promedio",
+    "diferencia_sofascore_total_points_won_pct_promedio",
+    "diferencia_sofascore_break_points_converted_promedio",
+    "diferencia_sofascore_break_points_saved_promedio",
+    "diferencia_sofascore_service_games_won_promedio",
+    "diferencia_sofascore_return_games_won_promedio",
+    "diferencia_sofascore_max_points_in_a_row_promedio",
+    "partidos_previos_entre_ellos",
+}
 TARGETS = {
     "gana_jugador_1": "Gana jugador 1",
     "jugador_1_gana_2_0": "Jugador 1 gana 2-0",
     "jugador_2_gana_2_0": "Jugador 2 gana 2-0",
     # "mas_19_5_games": "Mas de 19.5 games",
 }
+CATEGORY_EXPERIENCE_LOGIT_WEIGHT = 0.12
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -141,7 +175,7 @@ def logistic_columns(numeric: list[str]) -> list[str]:
     return [
         col
         for col in numeric
-        if col.startswith(LOGISTIC_NUMERIC_PREFIXES) and col not in LOGISTIC_EXCLUDED_COLUMNS
+        if col in STABLE_LOGISTIC_COLUMNS and col not in LOGISTIC_EXCLUDED_COLUMNS
     ]
 
 
@@ -236,12 +270,48 @@ def evaluate(y_true: np.ndarray, proba: np.ndarray) -> dict[str, float | None]:
     return metrics
 
 
+def to_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value))
+    except ValueError:
+        return None
+
+
+def sigmoid(value: float) -> float:
+    return float(1 / (1 + np.exp(-value)))
+
+
+def logit(probability: float) -> float:
+    clipped = min(max(probability, 1e-6), 1 - 1e-6)
+    return float(np.log(clipped / (1 - clipped)))
+
+
+def apply_category_experience_adjustment(row: dict, probability: float) -> float:
+    diff = to_float(row.get("diferencia_categoria_torneo_log_partidos_previos"))
+    if diff is None:
+        return probability
+    return sigmoid(logit(probability) + CATEGORY_EXPERIENCE_LOGIT_WEIGHT * diff)
+
+
+def apply_probability_adjustments(rows: list[dict], target: str, proba: np.ndarray) -> np.ndarray:
+    if target != "gana_jugador_1":
+        return proba
+    return np.array(
+        [apply_category_experience_adjustment(row, float(value)) for row, value in zip(rows, proba)]
+    )
+
+
 def add_predictions(rows: list[dict], feature_columns: list[str], models: dict[str, Pipeline]) -> list[dict]:
     x_rows = build_x(rows, feature_columns)
     output = [dict(row) for row in rows]
     for name, model in models.items():
         proba = model.predict_proba(x_rows)[:, 1]
         for row, value in zip(output, proba):
+            if name == "gana_jugador_1":
+                row["prob_gana_jugador_1_base"] = float(value)
+                value = apply_category_experience_adjustment(row, float(value))
             row[f"prob_{name}"] = float(value)
     for row in output:
         if "prob_jugador_2_gana_2_0" in row:
@@ -255,7 +325,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train and compare tennis prediction models.")
     parser.add_argument("--train", default="files/processed/model_dataset_2026/train.csv")
     parser.add_argument("--test", default="files/processed/model_dataset_2026/test_barcelona_munich.csv")
-    parser.add_argument("--madrid", default="files/processed/model_dataset_2026/test_madrid_upcoming.csv")
+    parser.add_argument("--upcoming", default="files/processed/model_dataset_2026/test_madrid_upcoming.csv")
+    parser.add_argument("--prediction-output", default="madrid_predictions.csv")
     parser.add_argument("--out-dir", default="files/processed/model_training_2026")
     args = parser.parse_args()
 
@@ -264,7 +335,7 @@ def main() -> None:
 
     train_rows = target_rows(read_csv(Path(args.train)))
     test_rows = target_rows(read_csv(Path(args.test)))
-    madrid_rows = read_csv(Path(args.madrid))
+    upcoming_rows = read_csv(Path(args.upcoming))
     feature_columns, numeric, categorical = infer_feature_columns(train_rows)
     x_train = build_x(train_rows, feature_columns)
     x_test = build_x(test_rows, feature_columns)
@@ -279,8 +350,8 @@ def main() -> None:
         model = build_logistic_model(active_numeric, categorical)
         model.fit(x_train, y_train)
         fitted_models[target] = model
-        train_proba = model.predict_proba(x_train)[:, 1]
-        test_proba = model.predict_proba(x_test)[:, 1]
+        train_proba = apply_probability_adjustments(train_rows, target, model.predict_proba(x_train)[:, 1])
+        test_proba = apply_probability_adjustments(test_rows, target, model.predict_proba(x_test)[:, 1])
         train_metrics = evaluate(y_train, train_proba)
         test_metrics = evaluate(y_test, test_proba)
         metrics = {
@@ -320,6 +391,13 @@ def main() -> None:
                 "active_features": active_features,
                 "active_numeric": active_numeric,
                 "active_categorical": categorical,
+                "probability_adjustments": {
+                    "gana_jugador_1": {
+                        "name": "category_experience_logit",
+                        "feature": "diferencia_categoria_torneo_log_partidos_previos",
+                        "weight": CATEGORY_EXPERIENCE_LOGIT_WEIGHT,
+                    }
+                },
             },
             indent=2,
         ),
@@ -332,7 +410,7 @@ def main() -> None:
         categorical,
     )
     write_csv(out_dir / "test_predictions.csv", add_predictions(test_rows, feature_columns, fitted_models))
-    write_csv(out_dir / "madrid_predictions.csv", add_predictions(madrid_rows, feature_columns, fitted_models))
+    write_csv(out_dir / args.prediction_output, add_predictions(upcoming_rows, feature_columns, fitted_models))
 
 
 if __name__ == "__main__":

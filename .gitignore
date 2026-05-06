@@ -21,6 +21,11 @@ files/processed/**
 !files/processed/model_training_2025_2026/
 !files/processed/model_training_2025_2026/metrics.csv
 !files/processed/model_training_2025_2026/madrid_predictions.csv
+!files/processed/model_training_2025_2026/roma_1r_predictions.csv
+!files/processed/dashboard_target.json
+!files/processed/roma_1r/
+!files/processed/roma_1r/upcoming_matches.csv
+!files/processed/roma_1r/upcoming_match_details.csv
 !files/processed/model_dataset_2026/
 !files/processed/model_dataset_2026/split_summary.json
 !files/processed/model_training_2026/

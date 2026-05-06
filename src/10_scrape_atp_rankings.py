@@ -16,9 +16,11 @@ import cloudscraper
 ATP_RANKING_HISTORY_URL = "https://www.atptour.com/es/-/www/rank/history/{player_id}"
 ATP_PLAYER_SEARCH_URL = "https://www.atptour.com/es/-/www/players/find/byname/{query}/es"
 MANUAL_ATP_IDS = {
+    "baez-a8fb1": ("b0bi", "Sebastian Baez"),
     "basile-54647": ("b0vx", "Pierluigi Basile"),
     "bautista-agut": ("bd06", "Roberto Bautista Agut"),
     "bondioli": ("b0pe", "Federico Bondioli"),
+    "cadenasso": ("c0nn", "Gianluca Cadenasso"),
     "carballes-baena": ("cf59", "Roberto Carballes Baena"),
     "carboni-ecd4c": ("c0ow", "Lorenzo Carboni"),
     "carreno-busta": ("cd85", "Pablo Carreno Busta"),
@@ -67,6 +69,10 @@ def player_key_from_url(url: str | None) -> str:
     return parts[-1] if parts else ""
 
 
+def player_key_from_name(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
+
+
 def normalize_name(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
@@ -104,6 +110,69 @@ def load_players(profiles_path: Path) -> list[dict]:
             }
         )
     return sorted(players, key=lambda row: row["player_key"])
+
+
+def load_upcoming_players(upcoming_path: Path) -> list[dict]:
+    players: dict[str, dict] = {}
+    for row in read_csv(upcoming_path):
+        for column in ("player1", "player2"):
+            name = row.get(column) or ""
+            key = player_key_from_name(name)
+            if not key or key in players:
+                continue
+            players[key] = {
+                "player_url": "",
+                "player_key": key,
+                "player_name": name,
+            }
+    return sorted(players.values(), key=lambda row: row["player_key"])
+
+
+def profile_aliases(player: dict) -> set[str]:
+    name = player.get("player_name") or ""
+    parts = [part for part in normalize_name(name).split() if part]
+    if not parts:
+        return set()
+    aliases = {parts[0], " ".join(parts)}
+    if len(parts) > 1:
+        aliases.add(" ".join(parts[:-1]))
+        aliases.add(f"{parts[0]} {parts[-1][0]}")
+    return aliases
+
+
+def apply_profile_aliases(upcoming_players: list[dict], profile_players: list[dict]) -> list[dict]:
+    profiles_by_alias: dict[str, list[dict]] = {}
+    for player in profile_players:
+        for alias in profile_aliases(player):
+            profiles_by_alias.setdefault(alias, []).append(player)
+
+    resolved = []
+    for player in upcoming_players:
+        matches = profiles_by_alias.get(normalize_name(player.get("player_name")), [])
+        unique = {match["player_key"]: match for match in matches}
+        if len(unique) == 1:
+            resolved.append(next(iter(unique.values())))
+        else:
+            resolved.append(player)
+    return resolved
+
+
+def merge_players(*player_groups: list[dict]) -> list[dict]:
+    players: dict[str, dict] = {}
+    for group in player_groups:
+        for player in group:
+            key = player.get("player_key")
+            if not key:
+                continue
+            if key not in players or (not players[key].get("player_url") and player.get("player_url")):
+                players[key] = player
+    return sorted(players.values(), key=lambda row: row["player_key"])
+
+
+def latest_rank_date(rows: list[dict]) -> date | None:
+    dates = [parse_date(row.get("rank_date")) for row in rows]
+    dates = [value for value in dates if value is not None]
+    return max(dates) if dates else None
 
 
 def resolve_player_id(scraper: cloudscraper.CloudScraper, player_name: str) -> tuple[str, str]:
@@ -158,31 +227,44 @@ def scrape_rank_history(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Scrape ATP singles ranking history for TennisExplorer players.")
     parser.add_argument("--profiles", type=Path, default=Path("files/processed/player_histories_2024_2026_extended/player_profiles.csv"))
+    parser.add_argument("--upcoming", type=Path, default=None, help="Optional upcoming matches CSV; player1/player2 are added to the ranking refresh set.")
+    parser.add_argument("--upcoming-only", action="store_true", help="Use only player1/player2 from --upcoming instead of the full profiles file.")
     parser.add_argument("--out-dir", type=Path, default=Path("files/processed/atp_rankings"))
     parser.add_argument("--delay", type=float, default=0.2)
     parser.add_argument("--max-players", type=int, default=None)
+    parser.add_argument("--refresh-existing", action="store_true", help="Fetch ranking history even for players already present in the local cache.")
     args = parser.parse_args()
 
-    players = load_players(args.profiles)
+    profile_players = load_players(args.profiles)
+    upcoming_players = load_upcoming_players(args.upcoming) if args.upcoming else []
+    if upcoming_players:
+        upcoming_players = apply_profile_aliases(upcoming_players, profile_players)
+    players = upcoming_players if args.upcoming_only else profile_players
+    if args.upcoming and not args.upcoming_only:
+        players = merge_players(players, upcoming_players)
     if args.max_players:
         players = players[: args.max_players]
 
     existing_history = read_csv(args.out_dir / "player_ranking_history.csv")
     existing_ids = read_csv(args.out_dir / "player_ids.csv")
-    history_by_key = {row.get("player_key") for row in existing_history if row.get("player_key")}
+    history_by_key: dict[str, list[dict]] = {}
+    for row in existing_history:
+        if row.get("player_key"):
+            history_by_key.setdefault(row["player_key"], []).append(row)
     id_rows_by_key = {row.get("player_key"): row for row in existing_ids if row.get("player_key")}
     history_rows = list(existing_history)
     id_rows = list(existing_ids)
 
     scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "mobile": False})
     for index, player in enumerate(players, start=1):
-        if player["player_key"] in history_by_key:
-            print(f"[ranking {index}/{len(players)}] cached {player['player_name']}")
+        cached_rows = history_by_key.get(player["player_key"], [])
+        if cached_rows and not args.refresh_existing:
+            print(f"[ranking {index}/{len(players)}] cached {player['player_name']} latest={latest_rank_date(cached_rows)}")
             continue
         print(f"[ranking {index}/{len(players)}] {player['player_name']}")
         atp_player_id = id_rows_by_key.get(player["player_key"], {}).get("atp_player_id", "")
         atp_player_name = id_rows_by_key.get(player["player_key"], {}).get("atp_player_name", "")
-        if not atp_player_id and player["player_key"] in MANUAL_ATP_IDS:
+        if player["player_key"] in MANUAL_ATP_IDS:
             atp_player_id, atp_player_name = MANUAL_ATP_IDS[player["player_key"]]
         status = "ok"
         error = ""
@@ -196,9 +278,10 @@ def main() -> None:
             else:
                 rows = scrape_rank_history(scraper, player, atp_player_id, atp_player_name)
                 time.sleep(args.delay)
-                history_rows.extend(rows)
                 if rows:
-                    history_by_key.add(player["player_key"])
+                    history_rows = [row for row in history_rows if row.get("player_key") != player["player_key"]]
+                    history_rows.extend(rows)
+                    history_by_key[player["player_key"]] = rows
         except Exception as exc:
             status = "error"
             error = str(exc)
@@ -222,6 +305,7 @@ def main() -> None:
         "resolved": sum(1 for row in id_rows if row.get("atp_player_id")),
         "history_players": len({row.get("player_key") for row in history_rows if row.get("player_key")}),
         "history_rows": len(history_rows),
+        "latest_rank_date": latest_rank_date(history_rows).isoformat() if latest_rank_date(history_rows) else None,
     }
     (args.out_dir / "ranking_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

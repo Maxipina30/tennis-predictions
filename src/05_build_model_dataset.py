@@ -8,7 +8,7 @@ import re
 from bisect import bisect_right
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
@@ -34,6 +34,26 @@ LEVEL_WEIGHTS = {
 UNSEEDED_SEED_VALUE = 64
 MISSING_RANK_VALUE = 10000
 MISSING_POINTS_VALUE = 0
+SOFASCORE_TENNIS_STATS = [
+    "aces",
+    "double_faults",
+    "first_serve_pct",
+    "first_serve_points_won_pct",
+    "second_serve_points_won_pct",
+    "break_points_converted",
+    "break_points_saved",
+    "break_points",
+    "break_points_won",
+    "break_points_total",
+    "service_games_won",
+    "return_games_won",
+    "service_points_won_pct",
+    "service_points_won",
+    "service_points_total",
+    "receiving_points_won_pct",
+    "total_points_won_pct",
+    "max_points_in_a_row",
+]
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -127,7 +147,7 @@ def parse_score(score: str | None) -> dict:
     sets1 = sets2 = games1 = games2 = tb1 = tb2 = 0
     for raw_set in score.split(","):
         part = raw_set.strip()
-        match = re.match(r"^(\d+)(?:\((\d+)\))?-(\d+)(?:\((\d+)\))?", part)
+        match = re.match(r"^(\d+)(?:\s*\(?(\d+)\)?)?\s*-\s*(\d+)(?:\s*\(?(\d+)\)?)?$", part)
         if not match:
             continue
         g1 = int(match.group(1))
@@ -202,6 +222,8 @@ class PlayerState:
     recent: deque[dict] = field(default_factory=lambda: deque(maxlen=20))
     last_match_date: datetime | None = None
     tournament_rounds: dict[tuple[int, str], int] = field(default_factory=dict)
+    sofascore_stat_sums: dict[str, float] = field(default_factory=lambda: defaultdict(float))
+    sofascore_stat_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
 
     def child_year(self, year: int) -> "PlayerState":
         return self.by_year.setdefault(year, PlayerState())
@@ -218,7 +240,7 @@ class PlayerState:
     def snapshot_core(self, prefix: str) -> dict:
         recent_5 = list(self.recent)[-5:]
         recent_10 = list(self.recent)[-10:]
-        return {
+        row = {
             f"{prefix}_partidos_previos": self.matches,
             f"{prefix}_log_partidos_previos": math.log1p(self.matches),
             f"{prefix}_porcentaje_victorias_previas": rate(self.wins, self.matches),
@@ -235,6 +257,11 @@ class PlayerState:
                 sum(r["game_diff"] for r in recent_10) / len(recent_10) if recent_10 else None
             ),
         }
+        for stat in SOFASCORE_TENNIS_STATS:
+            count = self.sofascore_stat_counts.get(stat, 0)
+            row[f"{prefix}_sofascore_{stat}_promedio"] = rate(self.sofascore_stat_sums.get(stat, 0.0), count)
+            row[f"{prefix}_sofascore_{stat}_partidos"] = count
+        return row
 
     def snapshot(self, prefix: str, match_date: datetime, year: int, surface: str, category: str, tournament: str) -> dict:
         row = self.snapshot_core(prefix)
@@ -295,6 +322,7 @@ class PlayerState:
         round_value = ROUND_ORDER.get(event.get("round") or "", 0)
         key = (year, tournament)
         self.tournament_rounds[key] = max(self.tournament_rounds.get(key, 0), round_value)
+        self.update_sofascore_stats(event, side)
 
         for child in (self.child_year(year), self.child_surface(surface), self.child_category(category), self.child_year_surface(year, surface)):
             child.update_without_children(event, side, weight, won, games_for, games_against, sets_for, sets_against, tb_won, tb_lost)
@@ -312,9 +340,24 @@ class PlayerState:
         self.tiebreaks_won += tb_won
         self.straight_set_wins += int(won and sets_against == 0)
         self.straight_set_losses += int((not won) and sets_for == 0)
+        self.update_sofascore_stats(event, side)
+
+    def update_sofascore_stats(self, event: dict, side: int) -> None:
+        stats = event.get(f"sofascore_player{side}_stats") or {}
+        for key in SOFASCORE_TENNIS_STATS:
+            value = to_float(stats.get(key))
+            if value is None:
+                continue
+            self.sofascore_stat_sums[key] += value
+            self.sofascore_stat_counts[key] += 1
 
 
-def build_history_events(player_matches: list[dict], tournament_categories: dict[str, str]) -> list[dict]:
+def build_history_events(
+    player_matches: list[dict],
+    tournament_categories: dict[str, str],
+    sofascore_stats_by_match: dict[str, dict[int, dict[str, float]]] | None = None,
+) -> list[dict]:
+    sofascore_stats_by_match = sofascore_stats_by_match or {}
     events_by_id: dict[str, dict] = {}
     for row in player_matches:
         date = parse_date(row.get("date_iso"))
@@ -342,6 +385,8 @@ def build_history_events(player_matches: list[dict], tournament_categories: dict
             "tb1": score["tb1"],
             "tb2": score["tb2"],
             "winner_side": winner_side,
+            "sofascore_player1_stats": sofascore_stats_for_match(sofascore_stats_by_match, match_id, 1),
+            "sofascore_player2_stats": sofascore_stats_for_match(sofascore_stats_by_match, match_id, 2),
         }
         events_by_id[match_id] = event
     return sorted(events_by_id.values(), key=lambda event: (event["date"], event["match_id"]))
@@ -382,15 +427,38 @@ def build_target_events(matches: list[dict]) -> list[dict]:
     return sorted(events, key=lambda event: (event["date"], event["match_id"] or ""))
 
 
-def build_upcoming_events(upcoming: list[dict], fallback_date: str, name_to_key: dict[str, str] | None = None) -> list[dict]:
+def upcoming_event_date(row: dict, fallback: datetime, today_offset_days: int = 0, tomorrow_offset_days: int = 1) -> datetime:
+    start_raw = row.get("start_raw") or ""
+    event_date = fallback
+    explicit_date = re.search(r"(\d{1,2})\.(\d{1,2})\.", start_raw)
+    if explicit_date:
+        year = to_int(row.get("year")) or fallback.year
+        event_date = fallback.replace(
+            year=year,
+            month=int(explicit_date.group(2)),
+            day=int(explicit_date.group(1)),
+        )
+    elif "tomorrow" in start_raw.lower():
+        event_date = fallback + timedelta(days=tomorrow_offset_days)
+    elif "today" in start_raw.lower() or re.match(r"^\d{1,2}:\d{2}", start_raw.strip()):
+        event_date = fallback + timedelta(days=today_offset_days)
+    time_match = re.search(r"(\d{1,2}):(\d{2})", start_raw)
+    if time_match:
+        event_date = event_date.replace(hour=int(time_match.group(1)), minute=int(time_match.group(2)))
+    return event_date
+
+
+def build_upcoming_events(
+    upcoming: list[dict],
+    fallback_date: str,
+    name_to_key: dict[str, str] | None = None,
+    today_offset_days: int = 0,
+    tomorrow_offset_days: int = 1,
+) -> list[dict]:
     fallback = parse_date(fallback_date) or datetime.today()
     events: list[dict] = []
     for row in upcoming:
-        start_raw = row.get("start_raw") or ""
-        event_date = fallback
-        time_match = re.search(r"(\d{1,2}):(\d{2})", start_raw)
-        if time_match:
-            event_date = event_date.replace(hour=int(time_match.group(1)), minute=int(time_match.group(2)))
+        event_date = upcoming_event_date(row, fallback, today_offset_days, tomorrow_offset_days)
         events.append(
             {
                 "match_id": row.get("match_id"),
@@ -499,6 +567,29 @@ def build_ranking_index(ranking_rows: list[dict]) -> dict[str, list[tuple[dateti
     for rankings in rankings_by_player.values():
         rankings.sort(key=lambda item: item[0])
     return rankings_by_player
+
+
+def build_sofascore_stats_index(rows: list[dict]) -> dict[str, dict[int, dict[str, float]]]:
+    stats_by_match: dict[str, dict[int, dict[str, float]]] = {}
+    for row in rows:
+        match_id = row.get("match_id")
+        if not match_id:
+            continue
+        by_side: dict[int, dict[str, float]] = {1: {}, 2: {}}
+        for side in (1, 2):
+            prefix = f"player{side}_"
+            for stat in SOFASCORE_TENNIS_STATS:
+                value = to_float(row.get(f"{prefix}{stat}"))
+                if value is not None:
+                    by_side[side][stat] = value
+        stats_by_match[str(match_id)] = by_side
+    return stats_by_match
+
+
+def sofascore_stats_for_match(stats_by_match: dict[str, dict[int, dict[str, float]]], match_id: str | None, side: int) -> dict[str, float]:
+    if not match_id:
+        return {}
+    return stats_by_match.get(str(match_id), {}).get(side, {})
 
 
 def ranking_as_of(rankings: list[tuple[datetime, dict]], match_date: datetime) -> dict:
@@ -673,6 +764,18 @@ def build_rows_for_events(
                 "dias_desde_ultima_lesion",
             ],
         )
+        diff_columns(
+            row,
+            "jugador_1",
+            "jugador_2",
+            [f"sofascore_{stat}_promedio" for stat in SOFASCORE_TENNIS_STATS],
+        )
+        diff_columns(
+            row,
+            "jugador_1",
+            "jugador_2",
+            [f"sofascore_{stat}_partidos" for stat in SOFASCORE_TENNIS_STATS],
+        )
         rows.append(row)
     return rows
 
@@ -683,13 +786,16 @@ def build_dataset(
     output_path: Path,
     injuries_path: Path | None = None,
     rankings_path: Path | None = None,
+    sofascore_stats_path: Path | None = None,
 ) -> None:
     matches = read_csv(matches_path)
     player_matches = read_csv(histories_path)
     injuries = read_csv(injuries_path) if injuries_path else []
     rankings = read_csv(rankings_path) if rankings_path else []
+    sofascore_rows = read_csv(sofascore_stats_path) if sofascore_stats_path else []
+    sofascore_stats_by_match = build_sofascore_stats_index(sofascore_rows)
     tournament_categories = {row.get("source_url", ""): row.get("category", "") for row in matches}
-    history_events = build_history_events(player_matches, tournament_categories)
+    history_events = build_history_events(player_matches, tournament_categories, sofascore_stats_by_match)
     target_events = build_target_events(matches)
 
     rows = build_rows_for_events(target_events, history_events, injuries, rankings)
@@ -703,6 +809,8 @@ def build_dataset(
                 "history_events": len(history_events),
                 "injury_rows": len(injuries),
                 "ranking_rows": len(rankings),
+                "sofascore_stat_rows": len(sofascore_rows),
+                "sofascore_stat_matches": len(sofascore_stats_by_match),
                 "model_rows": len(rows),
             },
             indent=2,
@@ -725,16 +833,19 @@ def main() -> None:
     parser.add_argument("--histories", default="files/processed/player_histories_2024_2026/player_matches.csv")
     parser.add_argument("--injuries", default="files/processed/player_histories_2024_2026/player_injuries.csv")
     parser.add_argument("--rankings", default="files/processed/atp_rankings/player_ranking_history.csv")
+    parser.add_argument("--sofascore-stats", default="files/processed/sofascore_tennis/match_stats.csv")
     parser.add_argument("--out", default="files/processed/model_dataset_2026/model_dataset.csv")
     args = parser.parse_args()
     injuries_path = Path(args.injuries)
     rankings_path = Path(args.rankings)
+    sofascore_stats_path = Path(args.sofascore_stats)
     build_dataset(
         Path(args.matches),
         Path(args.histories),
         Path(args.out),
         injuries_path if injuries_path.exists() else None,
         rankings_path if rankings_path.exists() else None,
+        sofascore_stats_path if sofascore_stats_path.exists() else None,
     )
 
 

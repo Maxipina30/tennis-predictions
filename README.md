@@ -93,3 +93,33 @@ venv312\Scripts\python.exe -m streamlit run app.py
 ```
 
 La app usa predicciones ya generadas y archivos livianos versionados en `files/processed/` para poder desplegar en Streamlit Community Cloud.
+
+### Preparar otro torneo/ronda para el dashboard
+
+Este comando scrapea el fixture del torneo, refresca desde ATP el ultimo ranking disponible para los jugadores de esa ronda, reconstruye features, reentrena y deja `files/processed/dashboard_target.json` apuntando al nuevo objetivo:
+
+```powershell
+venv312\Scripts\python.exe src/13_prepare_dashboard_target.py --label "Roma 1R" --tournament Rome --round 1R --url https://www.tennisexplorer.com/rome/2026/atp-men/ --reference-date 2026-05-05 --raw-today-offset-days 1 --raw-tomorrow-offset-days 2
+```
+
+Para otro torneo cambia `--label`, `--tournament`, `--round`, `--url` y la fecha de referencia. Los offsets permiten corregir textos relativos del sitio como `today` o `tomorrow` cuando la hora del torneo no coincide con tu zona horaria.
+
+## Stats de tenis desde SofaScore
+
+El scraper de SofaScore usa Playwright para abrir SofaScore y despues consume la API JSON, igual que el scraper de futbol. Primero instala los navegadores si todavia no estan:
+
+```powershell
+venv312\Scripts\python.exe -m playwright install chromium
+```
+
+Para sumar estadisticas de servicio y devolucion como aces, doble faltas, porcentaje de primer saque, puntos ganados con primer/segundo saque y break points:
+
+```powershell
+venv312\Scripts\python.exe src/14_scrape_sofascore_tennis_stats.py --matches files/processed/atp_2026/matches.csv --out files/processed/sofascore_tennis/match_stats.csv --from-date 2026-01-01 --to-date 2026-05-05
+```
+
+Luego reconstruye el dataset. Si existe `files/processed/sofascore_tennis/match_stats.csv`, `05_build_model_dataset.py` lo toma automaticamente y crea features historicas pre-partido con prefijo `sofascore_`:
+
+```powershell
+venv312\Scripts\python.exe src/05_build_model_dataset.py --sofascore-stats files/processed/sofascore_tennis/match_stats.csv
+```
