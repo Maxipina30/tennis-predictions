@@ -1,10 +1,10 @@
 {
-  "label": "Roma 1R",
+  "label": "Roma 2R",
   "tournament": "Rome",
-  "round": "1R",
-  "predictions_file": "files/processed/model_training_2025_2026/roma_1r_predictions.csv",
-  "upcoming_file": "files/processed/roma_1r/upcoming_matches.csv",
-  "local_reference_date": "2026-05-05",
+  "round": "2R",
+  "predictions_file": "files/processed/model_training_2025_2026/roma_2r_predictions.csv",
+  "upcoming_file": "files/processed/roma_2r/upcoming_matches.csv",
+  "local_reference_date": "2026-05-09",
   "raw_today_offset_days": 1,
   "raw_tomorrow_offset_days": 2,
   "rankings_file": "files/processed/atp_rankings/player_ranking_history.csv"

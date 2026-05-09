@@ -20,13 +20,25 @@ def slug(value: str) -> str:
     return "".join(char.lower() if char.isalnum() else "_" for char in value).strip("_")
 
 
+def tournament_slug(tournament: str) -> str:
+    return "-".join(tournament.lower().split())
+
+
+def derive_url(tournament: str, year: str) -> str:
+    return f"https://www.tennisexplorer.com/{tournament_slug(tournament)}/{year}/atp-men/"
+
+
+def derive_label(tournament: str, round_name: str) -> str:
+    return f"{tournament} {round_name}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare dashboard predictions for a tournament round.")
-    parser.add_argument("--label", default="Roma 1R")
-    parser.add_argument("--tournament", default="Rome")
-    parser.add_argument("--round", default="1R")
-    parser.add_argument("--url", default="https://www.tennisexplorer.com/rome/2026/atp-men/")
+    parser.add_argument("--tournament", required=True, help="Tournament name as it appears on TennisExplorer (e.g. Rome, Madrid).")
+    parser.add_argument("--round", required=True, help="Round identifier (e.g. 1R, 2R, QF, SF, F).")
     parser.add_argument("--year", default="2026")
+    parser.add_argument("--label", default=None, help="Display label. Defaults to '{tournament} {round}'.")
+    parser.add_argument("--url", default=None, help="TennisExplorer URL. Defaults to https://www.tennisexplorer.com/{slug}/{year}/atp-men/.")
     parser.add_argument("--reference-date", default=date.today().isoformat())
     parser.add_argument("--raw-today-offset-days", type=int, default=0)
     parser.add_argument("--raw-tomorrow-offset-days", type=int, default=1)
@@ -44,6 +56,10 @@ def main() -> None:
     parser.add_argument("--skip-tournament-scrape", action="store_true")
     parser.add_argument("--skip-ranking-refresh", action="store_true")
     args = parser.parse_args()
+    if not args.label:
+        args.label = derive_label(args.tournament, args.round)
+    if not args.url:
+        args.url = derive_url(args.tournament, args.year)
 
     target_slug = slug(args.label or f"{args.tournament}_{args.round}")
     target_dir = Path(args.target_dir or f"files/processed/{target_slug}")

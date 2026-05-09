@@ -1,20 +1,20 @@
 {
   "train_rows": 3426,
   "test_completed_rows": 70,
-  "test_upcoming_rows": 32,
-  "test_upcoming_output": "test_roma_1r_upcoming.csv",
+  "test_upcoming_rows": 16,
+  "test_upcoming_output": "test_roma_2r_upcoming.csv",
   "test_upcoming_tournament": "Rome",
-  "test_upcoming_round": "1R",
+  "test_upcoming_round": "2R",
   "test_upcoming_today_offset_days": 1,
   "test_upcoming_tomorrow_offset_days": 2,
-  "test_total_rows": 102,
+  "test_total_rows": 86,
   "test_completed_tournaments": [
     "Barcelona",
     "Madrid",
     "Munich"
   ],
   "injury_rows": 974,
-  "ranking_rows": 144270,
+  "ranking_rows": 144304,
   "sofascore_stat_rows": 3530,
   "sofascore_stat_matches": 3530
 }

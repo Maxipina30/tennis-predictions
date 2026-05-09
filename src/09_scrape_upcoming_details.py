@@ -143,24 +143,31 @@ def align_set_odds_to_upcoming_order(detail: dict, upcoming: dict, fallback_swap
 
 
 def validate_market_odds(detail: dict, upcoming: dict) -> None:
+    """Drop set/2-0 odds that violate the math vs the moneyline.
+
+    P(wins set) >= P(wins match) -> set odds must be <= ML odds.
+    P(wins 2-0) <= P(wins match) -> 2-0 odds must be >= ML odds.
+    When the bookmaker does not offer the matching market for an extreme
+    favorite the parser can pick up an unrelated handicap line; nulling
+    the value is safer than letting the dashboard recommend a wrong cuota.
+    """
     odds1 = to_float(upcoming.get("odds1_avg"))
     odds2 = to_float(upcoming.get("odds2_avg"))
-    checks = {
-        "p1_set_lt_moneyline": to_float(detail.get("set_odds_player1_wins_set")) < odds1
-        if odds1 and to_float(detail.get("set_odds_player1_wins_set"))
-        else None,
-        "p2_set_lt_moneyline": to_float(detail.get("set_odds_player2_wins_set")) < odds2
-        if odds2 and to_float(detail.get("set_odds_player2_wins_set"))
-        else None,
-        "p1_2_0_gt_moneyline": to_float(detail.get("set_odds_player1_wins_2_0")) > odds1
-        if odds1 and to_float(detail.get("set_odds_player1_wins_2_0"))
-        else None,
-        "p2_2_0_gt_moneyline": to_float(detail.get("set_odds_player2_wins_2_0")) > odds2
-        if odds2 and to_float(detail.get("set_odds_player2_wins_2_0"))
-        else None,
-    }
-    failures = [name for name, passed in checks.items() if passed is False]
-    detail["market_odds_check"] = "ok" if not failures else "fail:" + ",".join(failures)
+    nulled = []
+    invariants = [
+        ("set_odds_player1_wins_set", odds1, lambda v, ml: v > ml),
+        ("set_odds_player2_wins_set", odds2, lambda v, ml: v > ml),
+        ("set_odds_player1_wins_2_0", odds1, lambda v, ml: v < ml),
+        ("set_odds_player2_wins_2_0", odds2, lambda v, ml: v < ml),
+    ]
+    for field, ml, violates in invariants:
+        value = to_float(detail.get(field))
+        if value is None or ml is None:
+            continue
+        if violates(value, ml):
+            detail[field] = None
+            nulled.append(field)
+    detail["market_odds_check"] = "ok" if not nulled else "nulled:" + ",".join(nulled)
 
 
 def scrape_upcoming_details(upcoming_path: Path, output_path: Path, delay: float) -> None:
@@ -182,13 +189,10 @@ def scrape_upcoming_details(upcoming_path: Path, output_path: Path, delay: float
         detail["player2"] = match.get("player2")
         rows.append(detail)
         write_csv(output_path, rows)
-    failures = [row for row in rows if row.get("market_odds_check") != "ok"]
-    if failures:
-        summary = "; ".join(
-            f"{row.get('player1')} vs {row.get('player2')}: {row.get('market_odds_check')}" for row in failures
-        )
-        raise RuntimeError(f"Market odds sanity check failed: {summary}")
-    print(f"[check] market odds sanity ok ({len(rows)}/{len(rows)})")
+    nulled_rows = [row for row in rows if str(row.get("market_odds_check", "")).startswith("nulled:")]
+    for row in nulled_rows:
+        print(f"[check] {row.get('player1')} vs {row.get('player2')}: {row.get('market_odds_check')}")
+    print(f"[check] market odds sanity ok ({len(rows) - len(nulled_rows)}/{len(rows)} rows untouched, {len(nulled_rows)} had invalid markets nulled)")
 
 
 def main() -> None:

@@ -96,13 +96,50 @@ La app usa predicciones ya generadas y archivos livianos versionados en `files/p
 
 ### Preparar otro torneo/ronda para el dashboard
 
-Este comando scrapea el fixture del torneo, refresca desde ATP el ultimo ranking disponible para los jugadores de esa ronda, reconstruye features, reentrena y deja `files/processed/dashboard_target.json` apuntando al nuevo objetivo:
+El proceso completo (scrape del fixture, refresh de rankings ATP, scrape de detalle, rebuild de dataset, reentrenar y dejar `files/processed/dashboard_target.json` apuntando al nuevo objetivo) esta parametrizado por torneo y ronda.
+
+#### Wrapper PowerShell (recomendado)
 
 ```powershell
-venv312\Scripts\python.exe src/13_prepare_dashboard_target.py --label "Roma 1R" --tournament Rome --round 1R --url https://www.tennisexplorer.com/rome/2026/atp-men/ --reference-date 2026-05-05 --raw-today-offset-days 1 --raw-tomorrow-offset-days 2
+.\run_round_pipeline.ps1 -Tournament Rome -Round 2R
 ```
 
-Para otro torneo cambia `--label`, `--tournament`, `--round`, `--url` y la fecha de referencia. Los offsets permiten corregir textos relativos del sitio como `today` o `tomorrow` cuando la hora del torneo no coincide con tu zona horaria.
+Parametros del wrapper:
+
+- `-Tournament` (obligatorio): nombre del torneo como aparece en TennisExplorer (`Rome`, `Madrid`, `Roland Garros`, etc).
+- `-Round` (obligatorio): identificador de ronda (`1R`, `2R`, `3R`, `R16`, `QF`, `SF`, `F`).
+- `-Year` (opcional, default `2026`).
+- `-Label` (opcional, default `"{Tournament} {Round}"`).
+- `-Url` (opcional, default `https://www.tennisexplorer.com/{slug}/{year}/atp-men/`).
+- `-ReferenceDate` (opcional, default fecha de hoy en formato `yyyy-MM-dd`).
+- `-RawTodayOffsetDays` / `-RawTomorrowOffsetDays`: corrigen textos relativos del sitio (`today` / `tomorrow`) cuando la hora del torneo no coincide con tu zona horaria.
+- `-Delay`: segundos entre requests al scrapear (default `0.5`).
+- `-SkipTournamentScrape` / `-SkipRankingRefresh`: switches para reanudar el pipeline si el fixture o los rankings ya estan al dia.
+- `-LaunchDashboard`: switch para arrancar Streamlit al terminar.
+- `-Python`: ruta al interprete (default `venv312\Scripts\python.exe`).
+
+Ejemplos:
+
+```powershell
+# Roma 2R, fecha de referencia hoy, offsets +1/+2 porque la PC va atrasada respecto al sitio
+.\run_round_pipeline.ps1 -Tournament Rome -Round 2R -RawTodayOffsetDays 1 -RawTomorrowOffsetDays 2
+
+# Madrid QF para 2025, lanzando dashboard al final
+.\run_round_pipeline.ps1 -Tournament Madrid -Round QF -Year 2025 -LaunchDashboard
+
+# Reanudar Roma 3R sin re-scrapear si ya bajaste el fixture y los rankings
+.\run_round_pipeline.ps1 -Tournament Rome -Round 3R -SkipTournamentScrape -SkipRankingRefresh
+```
+
+#### Llamada directa al script Python
+
+Tambien podes llamar el orquestador directo si preferis:
+
+```powershell
+venv312\Scripts\python.exe src/13_prepare_dashboard_target.py --tournament Rome --round 2R --reference-date 2026-05-09 --raw-today-offset-days 1 --raw-tomorrow-offset-days 2
+```
+
+Si no pasas `--url` ni `--label` los deriva del torneo (`Rome` -> `https://www.tennisexplorer.com/rome/2026/atp-men/`, label `Rome 2R`). Para torneos con varias palabras en el slug (ej. `Roland Garros` -> `roland-garros`) tambien queda automatico.
 
 ## Stats de tenis desde SofaScore
 

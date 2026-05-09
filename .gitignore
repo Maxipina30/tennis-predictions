@@ -2,6 +2,9 @@ venv312/
 virtualenv.pyz
 __pycache__/
 *.py[cod]
+.claude/
+streamlit.out.log
+streamlit.err.log
 files/raw/
 files/processed/
 !files/
@@ -22,10 +25,14 @@ files/processed/**
 !files/processed/model_training_2025_2026/metrics.csv
 !files/processed/model_training_2025_2026/madrid_predictions.csv
 !files/processed/model_training_2025_2026/roma_1r_predictions.csv
+!files/processed/model_training_2025_2026/roma_2r_predictions.csv
 !files/processed/dashboard_target.json
 !files/processed/roma_1r/
 !files/processed/roma_1r/upcoming_matches.csv
 !files/processed/roma_1r/upcoming_match_details.csv
+!files/processed/roma_2r/
+!files/processed/roma_2r/upcoming_matches.csv
+!files/processed/roma_2r/upcoming_match_details.csv
 !files/processed/model_dataset_2026/
 !files/processed/model_dataset_2026/split_summary.json
 !files/processed/model_training_2026/
