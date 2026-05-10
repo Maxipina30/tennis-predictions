@@ -21,11 +21,13 @@ files/processed/**
 !files/processed/model_dataset_2025_2026/
 !files/processed/model_dataset_2025_2026/model_dataset.summary.json
 !files/processed/model_dataset_2025_2026/split_summary.json
+!files/processed/model_dataset_2025_2026/test_rome_3r_upcoming.csv
 !files/processed/model_training_2025_2026/
 !files/processed/model_training_2025_2026/metrics.csv
 !files/processed/model_training_2025_2026/madrid_predictions.csv
 !files/processed/model_training_2025_2026/roma_1r_predictions.csv
 !files/processed/model_training_2025_2026/roma_2r_predictions.csv
+!files/processed/model_training_2025_2026/rome_3r_predictions.csv
 !files/processed/dashboard_target.json
 !files/processed/roma_1r/
 !files/processed/roma_1r/upcoming_matches.csv
@@ -33,6 +35,10 @@ files/processed/**
 !files/processed/roma_2r/
 !files/processed/roma_2r/upcoming_matches.csv
 !files/processed/roma_2r/upcoming_match_details.csv
+!files/processed/rome_3r/
+!files/processed/rome_3r/tournament_metadata.json
+!files/processed/rome_3r/upcoming_matches.csv
+!files/processed/rome_3r/upcoming_match_details.csv
 !files/processed/model_dataset_2026/
 !files/processed/model_dataset_2026/split_summary.json
 !files/processed/model_training_2026/

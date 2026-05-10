@@ -1,9 +1,9 @@
 {
-  "label": "Roma 2R",
+  "label": "Rome 3R",
   "tournament": "Rome",
-  "round": "2R",
-  "predictions_file": "files/processed/model_training_2025_2026/roma_2r_predictions.csv",
-  "upcoming_file": "files/processed/roma_2r/upcoming_matches.csv",
+  "round": "3R",
+  "predictions_file": "files/processed/model_training_2025_2026/rome_3r_predictions.csv",
+  "upcoming_file": "files/processed/rome_3r/upcoming_matches.csv",
   "local_reference_date": "2026-05-09",
   "raw_today_offset_days": 1,
   "raw_tomorrow_offset_days": 2,
