@@ -766,12 +766,17 @@ def data_view() -> None:
 
 
 @st.cache_data
-def read_json(path: Path) -> dict:
+def read_json_cached(path: Path, modified_at: float) -> dict:
     if not path.exists():
         return {}
     import json
 
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_json(path: Path) -> dict:
+    modified_at = path.stat().st_mtime if path.exists() else 0
+    return read_json_cached(path, modified_at)
 
 
 def format_metrics(df: pd.DataFrame) -> pd.DataFrame:
