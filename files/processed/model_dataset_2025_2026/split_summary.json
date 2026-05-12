@@ -1,13 +1,13 @@
 {
   "train_rows": 3426,
   "test_completed_rows": 70,
-  "test_upcoming_rows": 16,
-  "test_upcoming_output": "test_rome_3r_upcoming.csv",
+  "test_upcoming_rows": 8,
+  "test_upcoming_output": "test_rome_r16_upcoming.csv",
   "test_upcoming_tournament": "Rome",
-  "test_upcoming_round": "3R",
+  "test_upcoming_round": "R16",
   "test_upcoming_today_offset_days": 1,
   "test_upcoming_tomorrow_offset_days": 2,
-  "test_total_rows": 86,
+  "test_total_rows": 78,
   "test_completed_tournaments": [
     "Barcelona",
     "Madrid",
