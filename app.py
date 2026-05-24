@@ -567,10 +567,15 @@ def recommendations_view() -> None:
 
     with pred_tabs[3]:
         group_names = ["Match winner", "Gana set", "3-0", "Handicap sets", "Gana 2+ sets"]
+        match_options = ["Todos", *sorted(market_rows["Partido"].dropna().unique())]
+        selected_market_match = st.selectbox("Partido", match_options, key="markets_match_filter")
+        filtered_market_rows = market_rows
+        if selected_market_match != "Todos":
+            filtered_market_rows = filtered_market_rows[filtered_market_rows["Partido"] == selected_market_match]
         tabs = st.tabs(group_names)
         for tab, group in zip(tabs, group_names):
             with tab:
-                group_rows = market_rows[market_rows["Grupo"] == group].sort_values(["fecha_hora_local", "Hora", "Partido", "Mercado"])
+                group_rows = filtered_market_rows[filtered_market_rows["Grupo"] == group].sort_values(["fecha_hora_local", "Hora", "Partido", "Mercado"])
                 display_columns = ["Fecha local", "Hora", "Partido", "Mercado", "Jugador", "Prob. modelo", "Cuota", "Prob. cuota", "Edge", "Kelly"]
                 market_table = sort_table_controls(group_rows[display_columns], f"markets_{group}", "Fecha local")
                 st.dataframe(style_market_table(market_table), use_container_width=True, hide_index=True)
