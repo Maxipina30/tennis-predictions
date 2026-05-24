@@ -10,12 +10,11 @@ import streamlit as st
 
 
 BASE = Path(__file__).parent
-MODEL_DATA = BASE / "files" / "processed" / "model_dataset_2025_2026"
-TRAINING = BASE / "files" / "processed" / "model_training_2025_2026"
+MODEL_DATA = BASE / "files" / "processed" / "grand_slam_moneyline" / "model_dataset"
+TRAINING = BASE / "files" / "processed" / "grand_slam_moneyline" / "model_training"
 TEMPORAL = BASE / "files" / "processed" / "temporal_validation_2026"
 ATP = BASE / "files" / "processed" / "atp_2026"
 ATP_2025 = BASE / "files" / "processed" / "atp_2025"
-ROME_QUALY = BASE / "files" / "processed" / "rome_2026_qualy"
 DASHBOARD_TARGET = BASE / "files" / "processed" / "dashboard_target.json"
 
 MODEL_NAME = "regresion_logistica"
@@ -23,10 +22,11 @@ DETAIL_ODDS_FILES = [
     ATP / "upcoming_match_details.csv",
     ATP / "match_details.csv",
 ]
-MODEL_LABEL = "Regresion logistica"
+MODEL_LABEL = "Grand Slam BO5"
 DEFAULT_MIN_MATCH_PROB = 0.65
 MIN_SET_PROB = 0.72
-MIN_SWEEP_PROB = 0.65
+MIN_SWEEP_PROB = 0.18
+MIN_HANDICAP_PROB = 0.45
 PARLAY_MIN_ODDS = 1.10
 PARLAY_MAX_ODDS = 1.50
 PARLAY_MIN_TOTAL_ODDS = 1.60
@@ -195,50 +195,6 @@ def load_predictions() -> pd.DataFrame:
     return preds.sort_values(sort_cols, ascending=ascending)
 
 
-def load_rome_qualy_predictions() -> pd.DataFrame:
-    df = read_csv(ROME_QUALY / "qualy_predictions.csv")
-    if df.empty:
-        return df
-
-    numeric_cols = [
-        "prob_gana_jugador_1",
-        "prob_gana_jugador_2",
-        "odds_jugador_1",
-        "odds_jugador_2",
-        "cuota_justa_jugador_1",
-        "cuota_justa_jugador_2",
-        "ev_jugador_1",
-        "ev_jugador_2",
-        "jugador_1_ranking",
-        "jugador_2_ranking",
-        "jugador_1_partidos_previos",
-        "jugador_2_partidos_previos",
-        "jugador_1_superficie_partidos_previos",
-        "jugador_2_superficie_partidos_previos",
-    ]
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = to_num(df[col])
-
-    df["ganador_modelo"] = df.apply(
-        lambda row: row["jugador_1"] if row["prob_gana_jugador_1"] >= row["prob_gana_jugador_2"] else row["jugador_2"],
-        axis=1,
-    )
-    df["prob_ganador_modelo"] = df[["prob_gana_jugador_1", "prob_gana_jugador_2"]].max(axis=1)
-    df["favorito_cuotas"] = df.apply(
-        lambda row: row["jugador_1"] if row["odds_jugador_1"] <= row["odds_jugador_2"] else row["jugador_2"],
-        axis=1,
-    )
-    df["alineado_cuotas"] = df["ganador_modelo"] == df["favorito_cuotas"]
-    df["mejor_ev"] = df[["ev_jugador_1", "ev_jugador_2"]].max(axis=1)
-    df[["recomendacion_apuesta", "motivo_recomendacion"]] = df.apply(
-        qualy_recommendation,
-        axis=1,
-        result_type="expand",
-    )
-    return df.sort_values(["recomendacion_apuesta", "mejor_ev"], ascending=[True, False])
-
-
 def implied_probability(odds1: pd.Series, odds2: pd.Series, side: int) -> pd.Series:
     raw1 = 1 / odds1
     raw2 = 1 / odds2
@@ -254,6 +210,12 @@ def load_detail_odds(extra_paths: list[Path] | None = None) -> pd.DataFrame:
         "set_odds_player2_wins_set",
         "set_odds_player1_wins_2_0",
         "set_odds_player2_wins_2_0",
+        "set_odds_player1_wins_3_0",
+        "set_odds_player2_wins_3_0",
+        "set_odds_table_player1_minus_1_5",
+        "set_odds_table_player2_minus_1_5",
+        "set_odds_table_player1_plus_1_5",
+        "set_odds_table_player2_plus_1_5",
     ]
     for path in [*(extra_paths or []), *DETAIL_ODDS_FILES]:
         frame = read_csv(path)
@@ -269,10 +231,14 @@ def load_detail_odds(extra_paths: list[Path] | None = None) -> pd.DataFrame:
 
 def add_set_market_columns(preds: pd.DataFrame) -> None:
     market_map = {
-        "j1_set": ("prob_jugador_1_gana_al_menos_un_set", "set_odds_player1_wins_set"),
-        "j2_set": ("prob_jugador_2_gana_al_menos_un_set", "set_odds_player2_wins_set"),
-        "j1_2_0": ("prob_jugador_1_gana_2_0", "set_odds_player1_wins_2_0"),
-        "j2_2_0": ("prob_jugador_2_gana_2_0", "set_odds_player2_wins_2_0"),
+        "j1_set": ("prob_jugador_1_gana_al_menos_1_set", "set_odds_player1_wins_set"),
+        "j2_set": ("prob_jugador_2_gana_al_menos_1_set", "set_odds_player2_wins_set"),
+        "j1_3_0": ("prob_jugador_1_gana_3_0", "set_odds_player1_wins_3_0"),
+        "j2_3_0": ("prob_jugador_2_gana_3_0", "set_odds_player2_wins_3_0"),
+        "j1_minus_1_5": ("prob_jugador_1_minus_1_5_sets", "set_odds_table_player1_minus_1_5"),
+        "j2_minus_1_5": ("prob_jugador_2_minus_1_5_sets", "set_odds_table_player2_plus_1_5"),
+        "j1_2sets": ("prob_jugador_1_gana_al_menos_2_sets", "set_odds_table_player1_plus_1_5"),
+        "j2_2sets": ("prob_jugador_2_gana_al_menos_2_sets", "set_odds_table_player2_minus_1_5"),
     }
     for suffix, (prob_col, odds_col) in market_map.items():
         preds[prob_col] = to_num(preds.get(prob_col, pd.Series(index=preds.index)))
@@ -305,38 +271,6 @@ def recommendation(row: pd.Series) -> str:
     return max(candidates, key=lambda item: item[0])[1]
 
 
-def qualy_recommendation(row: pd.Series) -> tuple[str, str]:
-    candidates = [
-        (1, row.get("jugador_1"), row.get("prob_gana_jugador_1"), row.get("odds_jugador_1"), row.get("cuota_justa_jugador_1"), row.get("ev_jugador_1")),
-        (2, row.get("jugador_2"), row.get("prob_gana_jugador_2"), row.get("odds_jugador_2"), row.get("cuota_justa_jugador_2"), row.get("ev_jugador_2")),
-    ]
-    side, player, prob, odds, fair_odds, ev = max(candidates, key=lambda item: item[5] if pd.notna(item[5]) else -999)
-    if pd.isna(ev) or pd.isna(prob) or pd.isna(odds) or pd.isna(fair_odds):
-        return "Sin apuesta", "Faltan cuotas o probabilidad del modelo."
-
-    rank = row.get(f"jugador_{side}_ranking")
-    prior = row.get(f"jugador_{side}_partidos_previos")
-    clay_prior = row.get(f"jugador_{side}_superficie_partidos_previos")
-    flags = []
-    if pd.isna(rank) or rank >= 10000:
-        flags.append("ranking faltante")
-    if pd.notna(prior) and prior < 25:
-        flags.append("poco historial total")
-    if pd.notna(clay_prior) and clay_prior < 10:
-        flags.append("poco historial en clay")
-    if prob < 0.54:
-        flags.append("probabilidad ajustada")
-    if row.get("ganador_modelo") != row.get("favorito_cuotas"):
-        flags.append("va contra mercado")
-
-    value_text = f"{player}: cuota {odds:.2f} > cuota justa {fair_odds:.2f}, EV {ev:.1%}, prob. modelo {prob:.1%}"
-    if ev >= 0.08 and prob >= 0.54 and len(flags) <= 2:
-        return f"Apostar {player}", value_text + ("; " + ", ".join(flags) if flags else ".")
-    if ev >= 0.08:
-        return f"Solo stake chico {player}", value_text + "; " + ", ".join(flags)
-    return "Sin apuesta", f"No hay edge suficiente. Mejor EV: {value_text}."
-
-
 def build_market_rows(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     markets = [
@@ -344,8 +278,12 @@ def build_market_rows(df: pd.DataFrame) -> pd.DataFrame:
         ("Match winner", "J2 gana partido", "jugador_2", "prob_modelo_j2", "odds2_avg", "prob_mercado_j2", "edge_j2", "kelly_j2", DEFAULT_MIN_MATCH_PROB),
         ("Gana set", "J1 gana al menos un set", "jugador_1", "prob_modelo_j1_set", "set_odds_player1_wins_set", "prob_mercado_j1_set", "edge_j1_set", "kelly_j1_set", MIN_SET_PROB),
         ("Gana set", "J2 gana al menos un set", "jugador_2", "prob_modelo_j2_set", "set_odds_player2_wins_set", "prob_mercado_j2_set", "edge_j2_set", "kelly_j2_set", MIN_SET_PROB),
-        ("2-0", "J1 gana 2-0", "jugador_1", "prob_modelo_j1_2_0", "set_odds_player1_wins_2_0", "prob_mercado_j1_2_0", "edge_j1_2_0", "kelly_j1_2_0", MIN_SWEEP_PROB),
-        ("2-0", "J2 gana 2-0", "jugador_2", "prob_modelo_j2_2_0", "set_odds_player2_wins_2_0", "prob_mercado_j2_2_0", "edge_j2_2_0", "kelly_j2_2_0", MIN_SWEEP_PROB),
+        ("3-0", "J1 gana 3-0", "jugador_1", "prob_modelo_j1_3_0", "set_odds_player1_wins_3_0", "prob_mercado_j1_3_0", "edge_j1_3_0", "kelly_j1_3_0", MIN_SWEEP_PROB),
+        ("3-0", "J2 gana 3-0", "jugador_2", "prob_modelo_j2_3_0", "set_odds_player2_wins_3_0", "prob_mercado_j2_3_0", "edge_j2_3_0", "kelly_j2_3_0", MIN_SWEEP_PROB),
+        ("Handicap sets", "J1 -1.5 sets", "jugador_1", "prob_modelo_j1_minus_1_5", "set_odds_table_player1_minus_1_5", "prob_mercado_j1_minus_1_5", "edge_j1_minus_1_5", "kelly_j1_minus_1_5", MIN_HANDICAP_PROB),
+        ("Handicap sets", "J2 -1.5 sets", "jugador_2", "prob_modelo_j2_minus_1_5", "set_odds_table_player2_plus_1_5", "prob_mercado_j2_minus_1_5", "edge_j2_minus_1_5", "kelly_j2_minus_1_5", MIN_HANDICAP_PROB),
+        ("Gana 2+ sets", "J1 gana al menos 2 sets", "jugador_1", "prob_modelo_j1_2sets", "set_odds_table_player1_plus_1_5", "prob_mercado_j1_2sets", "edge_j1_2sets", "kelly_j1_2sets", MIN_HANDICAP_PROB),
+        ("Gana 2+ sets", "J2 gana al menos 2 sets", "jugador_2", "prob_modelo_j2_2sets", "set_odds_table_player2_minus_1_5", "prob_mercado_j2_2sets", "edge_j2_2sets", "kelly_j2_2sets", MIN_HANDICAP_PROB),
     ]
     for _, match in df.iterrows():
         for group, market, player_col, prob_col, odds_col, implied_col, edge_col, kelly_col, min_prob in markets:
@@ -486,8 +424,12 @@ def style_recommendations(df: pd.DataFrame) -> pd.DataFrame:
         "prob_modelo_j2",
         "prob_modelo_j1_set",
         "prob_modelo_j2_set",
-        "prob_modelo_j1_2_0",
-        "prob_modelo_j2_2_0",
+        "prob_modelo_j1_3_0",
+        "prob_modelo_j2_3_0",
+        "prob_modelo_j1_minus_1_5",
+        "prob_modelo_j2_minus_1_5",
+        "prob_modelo_j1_2sets",
+        "prob_modelo_j2_2sets",
         "prob_mercado_j1",
         "prob_mercado_j2",
         "edge_j1",
@@ -498,8 +440,12 @@ def style_recommendations(df: pd.DataFrame) -> pd.DataFrame:
         "Prob. J2",
         "J1 gana set",
         "J2 gana set",
-        "J1 2-0",
-        "J2 2-0",
+        "J1 3-0",
+        "J2 3-0",
+        "J1 -1.5 sets",
+        "J2 -1.5 sets",
+        "J1 2+ sets",
+        "J2 2+ sets",
         "Edge J1",
         "Edge J2",
     ]:
@@ -533,14 +479,12 @@ def main() -> None:
     st.sidebar.caption(f"Torneo activo: {target.get('label')}")
     st.session_state["min_edge"] = st.sidebar.slider("Edge minimo", 0.00, 0.20, 0.05, 0.01)
     st.session_state["min_match_prob"] = st.sidebar.slider("Prob. minima match winner", 0.50, 0.95, DEFAULT_MIN_MATCH_PROB, 0.01)
-    page_tabs = st.tabs(["Predicciones", "Roma qualy", "Modelos", "Datos"])
+    page_tabs = st.tabs(["Predicciones", "Modelos", "Datos"])
     with page_tabs[0]:
         recommendations_view()
     with page_tabs[1]:
-        rome_qualy_view()
-    with page_tabs[2]:
         models_view()
-    with page_tabs[3]:
+    with page_tabs[2]:
         data_view()
 
 
@@ -607,8 +551,12 @@ def recommendations_view() -> None:
             "prob_modelo_j2": "Prob. J2",
             "prob_modelo_j1_set": "J1 gana set",
             "prob_modelo_j2_set": "J2 gana set",
-            "prob_modelo_j1_2_0": "J1 2-0",
-            "prob_modelo_j2_2_0": "J2 2-0",
+            "prob_modelo_j1_3_0": "J1 3-0",
+            "prob_modelo_j2_3_0": "J2 3-0",
+            "prob_modelo_j1_minus_1_5": "J1 -1.5 sets",
+            "prob_modelo_j2_minus_1_5": "J2 -1.5 sets",
+            "prob_modelo_j1_2sets": "J1 2+ sets",
+            "prob_modelo_j2_2sets": "J2 2+ sets",
             "edge_j1": "Edge J1",
             "edge_j2": "Edge J2",
             "recomendacion": "Recomendacion",
@@ -618,8 +566,9 @@ def recommendations_view() -> None:
         st.dataframe(style_recommendations(main_table), use_container_width=True, hide_index=True)
 
     with pred_tabs[3]:
-        tabs = st.tabs(["Match winner", "Gana set", "2-0"])
-        for tab, group in zip(tabs, ["Match winner", "Gana set", "2-0"]):
+        group_names = ["Match winner", "Gana set", "3-0", "Handicap sets", "Gana 2+ sets"]
+        tabs = st.tabs(group_names)
+        for tab, group in zip(tabs, group_names):
             with tab:
                 group_rows = market_rows[market_rows["Grupo"] == group].sort_values(["fecha_hora_local", "Hora", "Partido", "Mercado"])
                 display_columns = ["Fecha local", "Hora", "Partido", "Mercado", "Jugador", "Prob. modelo", "Cuota", "Prob. cuota", "Edge", "Kelly"]
@@ -663,79 +612,11 @@ def recommendations_view() -> None:
                     }
                 )
 
-
-def rome_qualy_view() -> None:
-    df = load_rome_qualy_predictions()
-    if df.empty:
-        st.warning("No hay predicciones de Roma qualy disponibles.")
-        return
-
-    bets = df[df["recomendacion_apuesta"].str.startswith("Apostar", na=False)]
-    small = df[df["recomendacion_apuesta"].str.startswith("Solo stake chico", na=False)]
-    aligned = int(df["alineado_cuotas"].sum())
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Partidos Roma qualy", len(df))
-    c2.metric("Alineados con cuotas", f"{aligned}/{len(df)}")
-    c3.metric("Apuestas", len(bets))
-    c4.metric("Stake chico", len(small))
-
-    st.subheader("Todos los partidos")
-    table = df.copy()
-    table["prob_gana_jugador_1"] = table["prob_gana_jugador_1"].map(format_pct)
-    table["prob_gana_jugador_2"] = table["prob_gana_jugador_2"].map(format_pct)
-    table["prob_ganador_modelo"] = table["prob_ganador_modelo"].map(format_pct)
-    table["ev_jugador_1"] = table["ev_jugador_1"].map(format_pct)
-    table["ev_jugador_2"] = table["ev_jugador_2"].map(format_pct)
-    for col in ["odds_jugador_1", "odds_jugador_2", "cuota_justa_jugador_1", "cuota_justa_jugador_2"]:
-        table[col] = table[col].map(lambda value: "" if pd.isna(value) else f"{value:.2f}")
-    display_columns = {
-        "fecha": "Fecha",
-        "ronda": "Ronda",
-        "jugador_1": "Jugador 1",
-        "jugador_2": "Jugador 2",
-        "prob_gana_jugador_1": "Prob. J1",
-        "prob_gana_jugador_2": "Prob. J2",
-        "odds_jugador_1": "Cuota real J1",
-        "odds_jugador_2": "Cuota real J2",
-        "cuota_justa_jugador_1": "Cuota justa J1",
-        "cuota_justa_jugador_2": "Cuota justa J2",
-        "ganador_modelo": "Ganador modelo",
-        "prob_ganador_modelo": "Prob. ganador",
-        "favorito_cuotas": "Favorito cuotas",
-        "ev_jugador_1": "EV J1",
-        "ev_jugador_2": "EV J2",
-        "recomendacion_apuesta": "Recomendacion",
-        "motivo_recomendacion": "Por que",
-    }
-    st.dataframe(
-        friendly_table(table, display_columns),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    with st.expander("Datos de soporte"):
-        support_columns = {
-            "jugador_1": "Jugador 1",
-            "jugador_1_ranking": "Ranking J1",
-            "jugador_1_partidos_previos": "Partidos previos J1",
-            "jugador_1_superficie_partidos_previos": "Partidos clay J1",
-            "jugador_2": "Jugador 2",
-            "jugador_2_ranking": "Ranking J2",
-            "jugador_2_partidos_previos": "Partidos previos J2",
-            "jugador_2_superficie_partidos_previos": "Partidos clay J2",
-            "alineado_cuotas": "Alineado con cuotas",
-        }
-        st.dataframe(friendly_table(df, support_columns), use_container_width=True, hide_index=True)
-
-
 def models_view() -> None:
     metrics = read_csv(TRAINING / "metrics.csv")
-    temporal = read_csv(TEMPORAL / "metrics.csv")
-    st.subheader("Split Barcelona + Munich")
+    st.subheader("Grand Slam BO5: train 2022-2025, test Australian Open 2026")
     st.dataframe(format_metrics(metrics), use_container_width=True, hide_index=True)
-    st.subheader("Validacion temporal: Monte Carlo + Barcelona + Munich")
-    st.dataframe(format_metrics(temporal), use_container_width=True, hide_index=True)
-    st.info("Usamos regresion logistica por estabilidad y menor sobreajuste. Random Forest queda como candidato alternativo para futuras calibraciones.")
+    st.info("Over 3.5 sets fue entrenado como experimento, pero queda fuera del dashboard operativo por mala metrica en test.")
 
 
 def data_view() -> None:
@@ -747,7 +628,7 @@ def data_view() -> None:
     scrape_2025_summary = read_json(ATP_2025 / "scrape_summary.json")
     c1, c2, c3 = st.columns(3)
     c1.metric("Train", split_summary.get("train_rows", 0))
-    c2.metric("Test", split_summary.get("test_total_rows", 0))
+    c2.metric("Test", split_summary.get("test_total_rows", split_summary.get("test_rows", 0)))
     c3.metric("Historial jugadores", dataset_summary.get("history_rows", 0))
 
     st.subheader("Resumen de datos")
@@ -760,7 +641,6 @@ def data_view() -> None:
         {"Concepto": "Filas de historial", "Valor": dataset_summary.get("history_rows", 0)},
         {"Concepto": "Filas de ranking", "Valor": dataset_summary.get("ranking_rows", 0)},
         {"Concepto": f"Partidos activos {target.get('label')}", "Valor": len(load_predictions())},
-        {"Concepto": "Partidos proximos Roma qualy", "Valor": len(read_csv(ROME_QUALY / "qualy_predictions.csv"))},
     ]
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
@@ -798,6 +678,7 @@ def format_metrics(df: pd.DataFrame) -> pd.DataFrame:
     out["Modelo"] = out["Modelo"].replace(
         {
             "regresion_logistica": "Regresion logistica",
+            "regresion_logistica_grand_slam": "Regresion logistica GS",
             "random_forest": "Random Forest",
             "gradient_boosting": "Gradient Boosting",
         }

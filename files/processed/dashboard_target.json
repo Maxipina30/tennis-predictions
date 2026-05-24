@@ -1,10 +1,10 @@
 {
-  "label": "Rome R16",
-  "tournament": "Rome",
-  "round": "R16",
-  "predictions_file": "files/processed/model_training_2025_2026/rome_r16_predictions.csv",
-  "upcoming_file": "files/processed/rome_r16/upcoming_matches.csv",
-  "local_reference_date": "2026-05-11",
+  "label": "Roland Garros 1R",
+  "tournament": "French Open",
+  "round": "1R",
+  "predictions_file": "files/processed/grand_slam_moneyline/model_training/roland_garros_1r_predictions.csv",
+  "upcoming_file": "files/processed/roland_garros_1r/upcoming_matches.csv",
+  "local_reference_date": "2026-05-23",
   "raw_today_offset_days": 1,
   "raw_tomorrow_offset_days": 2,
   "rankings_file": "files/processed/atp_rankings/player_ranking_history.csv"

@@ -849,22 +849,30 @@ def parse_asian_set_handicap_odds(soup: BeautifulSoup) -> dict[str, float | str 
             continue
         handicap = to_float(value_cell.get_text(" ", strip=True))
         is_average = is_average_odds_row(row)
-        if handicap == -1.5:
-            value1 = odds_cell_value(odds1_cell)
-            value2 = odds_cell_value(odds2_cell)
-            odds_player1_wins_set.append(value1)
-            if is_average:
-                avg_player1_wins_set = value1
-                result["set_odds_table_player1_minus_1_5"] = value1
-                result["set_odds_table_player2_minus_1_5"] = value2
-        elif handicap == 1.5:
+        if handicap == -2.5:
             value1 = odds_cell_value(odds1_cell)
             value2 = odds_cell_value(odds2_cell)
             odds_player2_wins_set.append(value2)
             if is_average:
                 avg_player2_wins_set = value2
+        elif handicap == -1.5:
+            value1 = odds_cell_value(odds1_cell)
+            value2 = odds_cell_value(odds2_cell)
+            if is_average:
+                result["set_odds_table_player1_minus_1_5"] = value1
+                result["set_odds_table_player2_minus_1_5"] = value2
+        elif handicap == 1.5:
+            value1 = odds_cell_value(odds1_cell)
+            value2 = odds_cell_value(odds2_cell)
+            if is_average:
                 result["set_odds_table_player1_plus_1_5"] = value1
                 result["set_odds_table_player2_plus_1_5"] = value2
+        elif handicap == 2.5:
+            value1 = odds_cell_value(odds1_cell)
+            value2 = odds_cell_value(odds2_cell)
+            odds_player1_wins_set.append(value1)
+            if is_average:
+                avg_player1_wins_set = value1
 
     result["set_odds_player1_wins_set"] = average_or_max_odds(avg_player1_wins_set, odds_player1_wins_set)
     result["set_odds_player2_wins_set"] = average_or_max_odds(avg_player2_wins_set, odds_player2_wins_set)
@@ -875,6 +883,8 @@ def parse_correct_score_odds(soup: BeautifulSoup) -> dict[str, float | None]:
     result = {
         "set_odds_player1_wins_2_0": None,
         "set_odds_player2_wins_2_0": None,
+        "set_odds_player1_wins_3_0": None,
+        "set_odds_player2_wins_3_0": None,
     }
     table = soup.select_one("#oddsMenu-4-data table.result")
     if not table:
@@ -883,8 +893,12 @@ def parse_correct_score_odds(soup: BeautifulSoup) -> dict[str, float | None]:
     current_market = ""
     player1_2_0: list[float | None] = []
     player2_2_0: list[float | None] = []
+    player1_3_0: list[float | None] = []
+    player2_3_0: list[float | None] = []
     avg_player1_2_0 = None
     avg_player2_2_0 = None
+    avg_player1_3_0 = None
+    avg_player2_3_0 = None
     for row in direct_table_rows(table):
         if "odds-type" in row.get("class", []):
             current_market = clean_text(row.get_text(" ", strip=True)).lower()
@@ -904,9 +918,19 @@ def parse_correct_score_odds(soup: BeautifulSoup) -> dict[str, float | None]:
             player2_2_0.append(value)
             if is_average:
                 avg_player2_2_0 = value
+        elif "3:0" in current_market:
+            player1_3_0.append(value)
+            if is_average:
+                avg_player1_3_0 = value
+        elif "0:3" in current_market:
+            player2_3_0.append(value)
+            if is_average:
+                avg_player2_3_0 = value
 
     result["set_odds_player1_wins_2_0"] = average_or_max_odds(avg_player1_2_0, player1_2_0)
     result["set_odds_player2_wins_2_0"] = average_or_max_odds(avg_player2_2_0, player2_2_0)
+    result["set_odds_player1_wins_3_0"] = average_or_max_odds(avg_player1_3_0, player1_3_0)
+    result["set_odds_player2_wins_3_0"] = average_or_max_odds(avg_player2_3_0, player2_3_0)
     return result
 
 

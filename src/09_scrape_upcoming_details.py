@@ -64,6 +64,7 @@ def swap_detail_sides(detail: dict) -> None:
         ("homeaway_avg_odds1", "homeaway_avg_odds2"),
         ("h2h_player1_wins", "h2h_player2_wins"),
         ("set_odds_player1_wins_2_0", "set_odds_player2_wins_2_0"),
+        ("set_odds_player1_wins_3_0", "set_odds_player2_wins_3_0"),
     ]
     swap_pairs(detail, pairs)
 
@@ -116,23 +117,10 @@ def align_set_odds_to_upcoming_order(detail: dict, upcoming: dict, fallback_swap
     handicap_player2 = detail.get("set_odds_handicap_player2")
     upcoming_player1 = upcoming.get("player1")
     upcoming_player2 = upcoming.get("player2")
-    odds1 = to_float(upcoming.get("odds1_avg"))
-    odds2 = to_float(upcoming.get("odds2_avg"))
 
     already_aligned = name_matches(upcoming_player1, handicap_player1) and name_matches(upcoming_player2, handicap_player2)
     reversed_order = name_matches(upcoming_player1, handicap_player2) and name_matches(upcoming_player2, handicap_player1)
-    side1 = table_side_for_upcoming_player(detail, upcoming_player1)
-    side2 = table_side_for_upcoming_player(detail, upcoming_player2)
-    player1_wins_set = choose_wins_set_odds(set_odds_candidates_for_table_side(detail, side1), odds1) if side1 else None
-    player2_wins_set = choose_wins_set_odds(set_odds_candidates_for_table_side(detail, side2), odds2) if side2 else None
-
-    if player1_wins_set is not None:
-        detail["set_odds_player1_wins_set"] = player1_wins_set
-    if player2_wins_set is not None:
-        detail["set_odds_player2_wins_set"] = player2_wins_set
-    if player1_wins_set is not None or player2_wins_set is not None:
-        detail["set_odds_validation"] = "selected_below_moneyline"
-    elif reversed_order:
+    if reversed_order:
         swap_set_odds_sides(detail)
         detail["set_odds_validation"] = "fallback_reversed_order"
     elif not already_aligned and fallback_swapped:
@@ -146,7 +134,7 @@ def validate_market_odds(detail: dict, upcoming: dict) -> None:
     """Drop set/2-0 odds that violate the math vs the moneyline.
 
     P(wins set) >= P(wins match) -> set odds must be <= ML odds.
-    P(wins 2-0) <= P(wins match) -> 2-0 odds must be >= ML odds.
+    P(wins 2-0/3-0) <= P(wins match) -> exact-score odds must be >= ML odds.
     When the bookmaker does not offer the matching market for an extreme
     favorite the parser can pick up an unrelated handicap line; nulling
     the value is safer than letting the dashboard recommend a wrong cuota.
@@ -159,6 +147,8 @@ def validate_market_odds(detail: dict, upcoming: dict) -> None:
         ("set_odds_player2_wins_set", odds2, lambda v, ml: v > ml),
         ("set_odds_player1_wins_2_0", odds1, lambda v, ml: v < ml),
         ("set_odds_player2_wins_2_0", odds2, lambda v, ml: v < ml),
+        ("set_odds_player1_wins_3_0", odds1, lambda v, ml: v < ml),
+        ("set_odds_player2_wins_3_0", odds2, lambda v, ml: v < ml),
     ]
     for field, ml, violates in invariants:
         value = to_float(detail.get(field))
