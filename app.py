@@ -160,6 +160,15 @@ def load_predictions() -> pd.DataFrame:
             "year",
         ]
         preds = preds.merge(upcoming[[c for c in keep if c in upcoming.columns]], on="match_id", how="left")
+    match_results = load_match_results(target["upcoming_path"].with_name("match_results.csv"))
+    if not match_results.empty:
+        preds = preds.merge(match_results, on="match_id", how="left")
+        if "result_start_raw" in preds.columns:
+            preds["start_raw"] = preds.get("start_raw", pd.Series(index=preds.index)).combine_first(preds["result_start_raw"])
+        if "result_odds1_avg" in preds.columns:
+            preds["odds1_avg"] = preds.get("odds1_avg", pd.Series(index=preds.index)).combine_first(preds["result_odds1_avg"])
+        if "result_odds2_avg" in preds.columns:
+            preds["odds2_avg"] = preds.get("odds2_avg", pd.Series(index=preds.index)).combine_first(preds["result_odds2_avg"])
     target_detail_odds = target["upcoming_path"].with_name("upcoming_match_details.csv")
     detail_odds = load_detail_odds([target_detail_odds])
     if not detail_odds.empty:
@@ -188,11 +197,48 @@ def load_predictions() -> pd.DataFrame:
     preds["prob_favorito_modelo"] = preds[["prob_modelo_j1", "prob_modelo_j2"]].max(axis=1)
     add_set_market_columns(preds)
     preds["recomendacion"] = preds.apply(recommendation, axis=1)
+    preds["resultado_recomendacion"] = preds.apply(recommendation_result, axis=1)
     preds["edge_recomendado"] = preds[["edge_j1", "edge_j2"]].max(axis=1)
     preds = add_schedule_columns(preds, target)
     sort_cols = [col for col in ["fecha_hora_local", "start_raw", "edge_recomendado"] if col in preds.columns]
     ascending = [True, True, False][: len(sort_cols)]
     return preds.sort_values(sort_cols, ascending=ascending)
+
+
+def load_match_results(path: Path) -> pd.DataFrame:
+    results = read_csv(path)
+    if results.empty or "match_id" not in results.columns:
+        return pd.DataFrame()
+    results = results.copy()
+    results["match_id"] = results["match_id"].astype(str)
+    rename = {
+        "player1": "result_player1",
+        "player2": "result_player2",
+        "start_raw": "result_start_raw",
+        "sets_player1": "result_sets_j1",
+        "sets_player2": "result_sets_j2",
+        "odds1_avg": "result_odds1_avg",
+        "odds2_avg": "result_odds2_avg",
+        "source_url": "result_source_url",
+    }
+    results = results.rename(columns=rename)
+    for col in ["result_sets_j1", "result_sets_j2", "result_odds1_avg", "result_odds2_avg"]:
+        if col in results.columns:
+            results[col] = to_num(results[col])
+    keep = [
+        "match_id",
+        "winner",
+        "result_date",
+        "result_start_raw",
+        "score",
+        "result_sets_j1",
+        "result_sets_j2",
+        "result_odds1_avg",
+        "result_odds2_avg",
+        "retired",
+        "result_source_url",
+    ]
+    return results[[col for col in keep if col in results.columns]]
 
 
 def implied_probability(odds1: pd.Series, odds2: pd.Series, side: int) -> pd.Series:
@@ -271,6 +317,66 @@ def recommendation(row: pd.Series) -> str:
     return max(candidates, key=lambda item: item[0])[1]
 
 
+def normalize_player(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def is_retired_result(value: object) -> bool:
+    return str(value).strip().lower() in {"true", "1", "yes", "retired"}
+
+
+def result_marker(won: bool | None) -> str:
+    if won is None:
+        return ""
+    return "check" if won else "cross"
+
+
+def player_side(match: pd.Series, player: object) -> int | None:
+    player_key = normalize_player(player)
+    if player_key and player_key == normalize_player(match.get("jugador_1")):
+        return 1
+    if player_key and player_key == normalize_player(match.get("jugador_2")):
+        return 2
+    return None
+
+
+def evaluate_pick(match: pd.Series, group: str, market: str, player: object) -> str:
+    winner = match.get("winner")
+    if pd.isna(winner) or not str(winner).strip():
+        return ""
+    side = player_side(match, player)
+    if side is None:
+        return ""
+    selected_sets = match.get(f"result_sets_j{side}")
+    other_sets = match.get(f"result_sets_j{2 if side == 1 else 1}")
+    if group != "Match winner" and is_retired_result(match.get("retired")):
+        return "void"
+    if group == "Match winner":
+        return result_marker(normalize_player(player) == normalize_player(winner))
+    if pd.isna(selected_sets) or pd.isna(other_sets):
+        return ""
+    if group == "Gana set":
+        return result_marker(selected_sets >= 1)
+    if group == "3-0":
+        return result_marker(selected_sets == 3 and other_sets == 0)
+    if group == "Handicap sets":
+        return result_marker((selected_sets - other_sets) >= 2)
+    if group == "Gana 2+ sets":
+        return result_marker(selected_sets >= 2)
+    return ""
+
+
+def recommendation_result(row: pd.Series) -> str:
+    recommendation_text = str(row.get("recomendacion") or "")
+    if recommendation_text == "Sin apuesta":
+        return ""
+    for side in (1, 2):
+        player = row.get(f"jugador_{side}")
+        if recommendation_text.startswith(f"{player} ML"):
+            return evaluate_pick(row, "Match winner", f"J{side} gana partido", player)
+    return ""
+
+
 def build_market_rows(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     markets = [
@@ -302,6 +408,9 @@ def build_market_rows(df: pd.DataFrame) -> pd.DataFrame:
                     "Edge": match.get(edge_col),
                     "Kelly": match.get(kelly_col),
                     "Prob. minima": min_prob,
+                    "Resultado pick": evaluate_pick(match, group, market, match.get(player_col)),
+                    "Ganador": match.get("winner"),
+                    "Score": match.get("score"),
                 }
             )
     return pd.DataFrame(rows)
@@ -451,7 +560,10 @@ def style_recommendations(df: pd.DataFrame) -> pd.DataFrame:
     ]:
         if col in display.columns:
             display[col] = display[col].map(format_pct)
-    return display
+    for col in ["Cuota J1", "Cuota J2"]:
+        if col in display.columns:
+            display[col] = display[col].map(lambda value: "" if pd.isna(value) else f"{value:.2f}")
+    return style_result_column(display)
 
 
 def style_market_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -462,7 +574,34 @@ def style_market_table(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["Cuota", "Cuota combinada"]:
         if col in display.columns:
             display[col] = display[col].map(lambda value: "" if pd.isna(value) else f"{value:.2f}")
-    return display
+    return style_result_column(display)
+
+
+def friendly_result(value: object) -> str:
+    markers = {
+        "check": "✓",
+        "cross": "✗",
+        "void": "-",
+    }
+    return markers.get(str(value or "").strip().lower(), "")
+
+
+def result_cell_style(value: object) -> str:
+    if value == "✓":
+        return "color: #15803d; font-weight: 700; font-size: 1.1rem;"
+    if value == "✗":
+        return "color: #b91c1c; font-weight: 700; font-size: 1.1rem;"
+    if value == "-":
+        return "color: #6b7280; font-weight: 700;"
+    return ""
+
+
+def style_result_column(display: pd.DataFrame):
+    if "Resultado pick" not in display.columns:
+        return display
+    styled = display.copy()
+    styled["Resultado pick"] = styled["Resultado pick"].map(friendly_result)
+    return styled.style.map(result_cell_style, subset=["Resultado pick"])
 
 
 def friendly_table(df: pd.DataFrame, columns: dict[str, str]) -> pd.DataFrame:
@@ -515,7 +654,7 @@ def recommendations_view() -> None:
             if selected_day != "Todos":
                 rec_day = date.fromisoformat(selected_day)
                 rec_rows = rec_rows[pd.to_datetime(rec_rows["fecha_hora_local"], errors="coerce").dt.date == rec_day]
-            rec_columns = ["Fecha local", "Hora", "Partido", "Grupo", "Mercado", "Jugador", "Recomendada por", "Prob. modelo", "Cuota", "Prob. cuota", "Edge"]
+            rec_columns = ["Resultado pick", "Fecha local", "Partido", "Grupo", "Mercado", "Jugador", "Recomendada por", "Prob. modelo", "Cuota", "Prob. cuota", "Edge", "Ganador", "Score"]
             if rec_rows.empty:
                 st.info("No hay recomendaciones para el dia seleccionado con los filtros actuales.")
             else:
@@ -535,14 +674,13 @@ def recommendations_view() -> None:
             c1, c2 = st.columns(2)
             c1.metric("Picks", len(parlay_rows))
             c2.metric("Cuota combinada", f"{final_odds:.2f}")
-            parlay_columns = ["Fecha local", "Hora", "Partido", "Grupo", "Mercado", "Jugador", "Recomendada por", "Prob. modelo", "Cuota", "Prob. cuota", "Edge"]
+            parlay_columns = ["Resultado pick", "Fecha local", "Partido", "Grupo", "Mercado", "Jugador", "Recomendada por", "Prob. modelo", "Cuota", "Prob. cuota", "Edge", "Ganador", "Score"]
             parlay_table = sort_table_controls(parlay_rows[parlay_columns], "parlay_table", "Prob. modelo")
             st.dataframe(style_market_table(parlay_table), use_container_width=True, hide_index=True)
 
     with pred_tabs[2]:
         main_columns = {
             "fecha_local": "Fecha local",
-            "start_raw": "Hora sitio",
             "jugador_1": "Jugador 1",
             "jugador_2": "Jugador 2",
             "odds1_avg": "Cuota J1",
@@ -560,23 +698,47 @@ def recommendations_view() -> None:
             "edge_j1": "Edge J1",
             "edge_j2": "Edge J2",
             "recomendacion": "Recomendacion",
+            "resultado_recomendacion": "Resultado pick",
+            "winner": "Ganador",
+            "score": "Score",
         }
-        main_table = friendly_table(df, main_columns)
+        summary_df = df
+        available_days = sorted(pd.to_datetime(summary_df["fecha_hora_local"], errors="coerce").dt.date.dropna().unique())
+        day_options = ["Todos", *[day.isoformat() for day in available_days]]
+        selected_day = st.selectbox("Dia", day_options, key="summary_day")
+        if selected_day != "Todos":
+            summary_day = date.fromisoformat(selected_day)
+            summary_df = summary_df[pd.to_datetime(summary_df["fecha_hora_local"], errors="coerce").dt.date == summary_day]
+        main_table = friendly_table(summary_df, main_columns)
         main_table = sort_table_controls(main_table, "summary_table", "Fecha local")
         st.dataframe(style_recommendations(main_table), use_container_width=True, hide_index=True)
 
     with pred_tabs[3]:
         group_names = ["Match winner", "Gana set", "3-0", "Handicap sets", "Gana 2+ sets"]
-        match_options = ["Todos", *sorted(market_rows["Partido"].dropna().unique())]
-        selected_market_match = st.selectbox("Partido", match_options, key="markets_match_filter")
+        available_days = sorted(pd.to_datetime(market_rows["fecha_hora_local"], errors="coerce").dt.date.dropna().unique())
+        day_options = ["Todos", *[day.isoformat() for day in available_days]]
+        selected_market_day = st.selectbox("Dia", day_options, key="markets_day")
         filtered_market_rows = market_rows
+        if selected_market_day != "Todos":
+            market_day = date.fromisoformat(selected_market_day)
+            filtered_market_rows = filtered_market_rows[
+                pd.to_datetime(filtered_market_rows["fecha_hora_local"], errors="coerce").dt.date == market_day
+            ]
+        match_order = (
+            filtered_market_rows[["fecha_hora_local", "Hora", "Partido"]]
+            .dropna(subset=["Partido"])
+            .drop_duplicates("Partido")
+            .sort_values(["fecha_hora_local", "Hora", "Partido"])
+        )
+        match_options = ["Todos", *match_order["Partido"].tolist()]
+        selected_market_match = st.selectbox("Partido", match_options, key="markets_match_filter")
         if selected_market_match != "Todos":
             filtered_market_rows = filtered_market_rows[filtered_market_rows["Partido"] == selected_market_match]
         tabs = st.tabs(group_names)
         for tab, group in zip(tabs, group_names):
             with tab:
                 group_rows = filtered_market_rows[filtered_market_rows["Grupo"] == group].sort_values(["fecha_hora_local", "Hora", "Partido", "Mercado"])
-                display_columns = ["Fecha local", "Hora", "Partido", "Mercado", "Jugador", "Prob. modelo", "Cuota", "Prob. cuota", "Edge", "Kelly"]
+                display_columns = ["Resultado pick", "Fecha local", "Partido", "Mercado", "Jugador", "Prob. modelo", "Cuota", "Prob. cuota", "Edge", "Kelly", "Ganador", "Score"]
                 market_table = sort_table_controls(group_rows[display_columns], f"markets_{group}", "Fecha local")
                 st.dataframe(style_market_table(market_table), use_container_width=True, hide_index=True)
 
@@ -628,26 +790,78 @@ def data_view() -> None:
     target = load_target_config()
     split_summary = read_json(MODEL_DATA / "split_summary.json")
     dataset_summary = read_json(MODEL_DATA / "model_dataset.summary.json")
-    ranking_summary = read_json(BASE / "files" / "processed" / "atp_rankings" / "ranking_summary.json")
-    scrape_summary = read_json(ATP / "scrape_summary.json")
-    scrape_2025_summary = read_json(ATP_2025 / "scrape_summary.json")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Train", split_summary.get("train_rows", 0))
-    c2.metric("Test", split_summary.get("test_total_rows", split_summary.get("test_rows", 0)))
-    c3.metric("Historial jugadores", dataset_summary.get("history_rows", 0))
+    metrics = read_csv(TRAINING / "metrics.csv")
+    raw_summaries = []
+    raw_dir = BASE / "files" / "processed" / "grand_slam_moneyline" / "raw"
+    for summary_path in sorted(raw_dir.glob("grand_slam_*/scrape_summary.json")):
+        summary = read_json(summary_path)
+        if summary:
+            raw_summaries.append(
+                {
+                    "Anio": summary.get("year"),
+                    "Torneos": summary.get("tournaments", 0),
+                    "Partidos": summary.get("matches", 0),
+                }
+            )
 
-    st.subheader("Resumen de datos")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Partidos Grand Slam BO5", split_summary.get("grand_slam_match_rows", dataset_summary.get("matches", 0)))
+    c2.metric("Train", split_summary.get("train_rows", 0))
+    c3.metric("Test AO 2026", split_summary.get("test_rows", 0))
+    c4.metric("Targets entrenados", len(metrics))
+
+    st.subheader("Dataset Grand Slam")
     summary_rows = [
-        {"Concepto": "Torneos ATP 2025", "Valor": scrape_2025_summary.get("tournaments", 0)},
-        {"Concepto": "Partidos ATP 2025", "Valor": scrape_2025_summary.get("matches", 0)},
-        {"Concepto": "Torneos ATP 2026", "Valor": scrape_summary.get("tournaments", 0)},
-        {"Concepto": "Partidos ATP 2026", "Valor": scrape_summary.get("matches", 0)},
-        {"Concepto": "Jugadores con ranking ATP", "Valor": ranking_summary.get("history_players", 0)},
-        {"Concepto": "Filas de historial", "Valor": dataset_summary.get("history_rows", 0)},
-        {"Concepto": "Filas de ranking", "Valor": dataset_summary.get("ranking_rows", 0)},
+        {"Concepto": "Periodo train", "Valor": split_summary.get("train_period", "")},
+        {"Concepto": "Periodo test", "Valor": split_summary.get("test_period", "")},
+        {"Concepto": "Target principal", "Valor": split_summary.get("target", "moneyline")},
+        {"Concepto": "Filas modelo", "Valor": dataset_summary.get("model_rows", 0)},
+        {"Concepto": "Filas historial jugadores", "Valor": dataset_summary.get("history_rows", 0)},
+        {"Concepto": "Eventos historial", "Valor": dataset_summary.get("history_events", 0)},
+        {"Concepto": "Filas lesiones", "Valor": dataset_summary.get("injury_rows", 0)},
+        {"Concepto": "Filas ranking ATP", "Valor": dataset_summary.get("ranking_rows", 0)},
+        {"Concepto": "Partidos con stats SofaScore", "Valor": dataset_summary.get("sofascore_stat_matches", 0)},
         {"Concepto": f"Partidos activos {target.get('label')}", "Valor": len(load_predictions())},
     ]
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+    if raw_summaries:
+        st.subheader("Scrapes base Grand Slam")
+        raw_table = pd.DataFrame(raw_summaries)
+        raw_table.loc[len(raw_table)] = {
+            "Anio": "Total",
+            "Torneos": raw_table["Torneos"].sum(),
+            "Partidos": raw_table["Partidos"].sum(),
+        }
+        st.dataframe(raw_table, use_container_width=True, hide_index=True)
+
+    st.subheader("Modelos entrenados")
+    model_columns = {
+        "descripcion": "Mercado",
+        "model": "Modelo",
+        "target": "Target",
+        "test_accuracy": "Accuracy test",
+        "test_brier_score": "Brier test",
+        "test_roc_auc": "AUC test",
+    }
+    st.dataframe(format_model_targets(metrics, model_columns), use_container_width=True, hide_index=True)
+
+
+def format_model_targets(metrics: pd.DataFrame, columns: dict[str, str]) -> pd.DataFrame:
+    if metrics.empty:
+        return metrics
+    out = friendly_table(metrics, columns).copy()
+    if "Modelo" in out.columns:
+        out["Modelo"] = out["Modelo"].replace(
+            {
+                "regresion_logistica_grand_slam": "Regresion logistica GS",
+                "regresion_logistica": "Regresion logistica",
+            }
+        )
+    for col in ["Accuracy test", "Brier test", "AUC test"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").round(3)
+    return out
 
 
 @st.cache_data
