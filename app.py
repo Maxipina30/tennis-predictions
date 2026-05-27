@@ -31,6 +31,8 @@ PARLAY_MIN_ODDS = 1.10
 PARLAY_MAX_ODDS = 1.50
 PARLAY_MIN_TOTAL_ODDS = 1.60
 PARLAY_MAX_TOTAL_ODDS = 2.00
+MONEYLINE_STAKE_UNITS = 1.0
+PARLAY_STAKE_UNITS = 5.0
 DEFAULT_TARGET_CONFIG = {
     "label": "Madrid upcoming",
     "tournament": "Madrid",
@@ -139,8 +141,7 @@ def add_schedule_columns(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     return out
 
 
-def load_predictions() -> pd.DataFrame:
-    target = load_target_config()
+def load_prediction_frame(target: dict) -> pd.DataFrame:
     preds = filter_prediction_target(read_csv(target["predictions_path"]), target)
     upcoming = filter_prediction_target(read_csv(target["upcoming_path"]), target)
     if preds.empty:
@@ -200,9 +201,23 @@ def load_predictions() -> pd.DataFrame:
     preds["resultado_recomendacion"] = preds.apply(recommendation_result, axis=1)
     preds["edge_recomendado"] = preds[["edge_j1", "edge_j2"]].max(axis=1)
     preds = add_schedule_columns(preds, target)
+    if "result_date" in preds.columns and "fecha_hora_local" in preds.columns:
+        result_dates = pd.to_datetime(preds["result_date"], errors="coerce")
+        has_result_date = result_dates.notna()
+        if has_result_date.any():
+            times = pd.to_datetime(preds["fecha_hora_local"], errors="coerce").dt.time
+            preds.loc[has_result_date, "fecha_hora_local"] = [
+                datetime.combine(day.date(), time_value if pd.notna(time_value) else datetime.min.time())
+                for day, time_value in zip(result_dates[has_result_date], times[has_result_date])
+            ]
+            preds.loc[has_result_date, "fecha_local"] = pd.to_datetime(preds.loc[has_result_date, "fecha_hora_local"]).dt.strftime("%Y-%m-%d %H:%M")
     sort_cols = [col for col in ["fecha_hora_local", "start_raw", "edge_recomendado"] if col in preds.columns]
     ascending = [True, True, False][: len(sort_cols)]
     return preds.sort_values(sort_cols, ascending=ascending)
+
+
+def load_predictions() -> pd.DataFrame:
+    return load_prediction_frame(load_target_config())
 
 
 def load_match_results(path: Path) -> pd.DataFrame:
@@ -377,6 +392,77 @@ def recommendation_result(row: pd.Series) -> str:
     return ""
 
 
+def parse_round_number(round_name: object) -> int | None:
+    match = re.fullmatch(r"(\d+)R", str(round_name or "").strip().upper())
+    return int(match.group(1)) if match else None
+
+
+def round_slug(round_name: str) -> str:
+    return str(round_name).strip().lower()
+
+
+def target_prefix_from_path(path: Path, round_name: object, suffix: str) -> str:
+    stem = path.stem
+    marker = f"_{round_slug(str(round_name))}{suffix}"
+    return stem[: -len(marker)] if marker and stem.endswith(marker) else stem
+
+
+def previous_round_configs(target: dict) -> list[dict]:
+    current_round = parse_round_number(target.get("round"))
+    if not current_round or current_round <= 1:
+        return []
+
+    predictions_prefix = target_prefix_from_path(target["predictions_path"], target.get("round"), "_predictions")
+    upcoming_prefix = target_prefix_from_path(target["upcoming_path"].parent, target.get("round"), "")
+    configs = []
+    for number in range(1, current_round):
+        previous_round = f"{number}R"
+        predictions_path = target["predictions_path"].with_name(f"{predictions_prefix}_{round_slug(previous_round)}_predictions.csv")
+        upcoming_path = target["upcoming_path"].parent.parent / f"{upcoming_prefix}_{round_slug(previous_round)}" / "upcoming_matches.csv"
+        if not predictions_path.exists() or not upcoming_path.exists():
+            continue
+        configs.append(
+            {
+                **target,
+                "label": f"{target.get('tournament')} {previous_round}",
+                "round": previous_round,
+                "predictions_path": predictions_path,
+                "upcoming_path": upcoming_path,
+            }
+        )
+    return configs
+
+
+def load_historical_predictions(target: dict) -> pd.DataFrame:
+    frames = []
+    for config in previous_round_configs(target):
+        frame = load_prediction_frame(config)
+        if frame.empty:
+            continue
+        frame = frame.copy()
+        frame["Ronda historial"] = config.get("round")
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def load_historical_raw_results(target: dict) -> pd.DataFrame:
+    frames = []
+    for config in previous_round_configs(target):
+        path = config["upcoming_path"].with_name("match_results.csv")
+        frame = read_csv(path)
+        if frame.empty:
+            continue
+        frame = frame.copy()
+        frame["match_id"] = frame["match_id"].astype(str)
+        frame["Ronda historial"] = config.get("round")
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
 def build_market_rows(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     markets = [
@@ -397,6 +483,7 @@ def build_market_rows(df: pd.DataFrame) -> pd.DataFrame:
                 {
                     "fecha_hora_local": match.get("fecha_hora_local"),
                     "Fecha local": match.get("fecha_local"),
+                    "Ronda historial": match.get("Ronda historial"),
                     "Hora": match.get("start_raw"),
                     "Partido": f"{match.get('jugador_1')} vs {match.get('jugador_2')}",
                     "Grupo": group,
@@ -574,6 +661,10 @@ def style_market_table(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["Cuota", "Cuota combinada"]:
         if col in display.columns:
             display[col] = display[col].map(lambda value: "" if pd.isna(value) else f"{value:.2f}")
+    if "Stake" in display.columns:
+        display["Stake"] = display["Stake"].map(lambda value: "" if pd.isna(value) else f"{value:.1f} u")
+    if "Ganancia" in display.columns:
+        display["Ganancia"] = display["Ganancia"].map(format_units)
     return style_result_column(display)
 
 
@@ -618,13 +709,207 @@ def main() -> None:
     st.sidebar.caption(f"Torneo activo: {target.get('label')}")
     st.session_state["min_edge"] = st.sidebar.slider("Edge minimo", 0.00, 0.20, 0.05, 0.01)
     st.session_state["min_match_prob"] = st.sidebar.slider("Prob. minima match winner", 0.50, 0.95, DEFAULT_MIN_MATCH_PROB, 0.01)
-    page_tabs = st.tabs(["Predicciones", "Modelos", "Datos"])
+    page_tabs = st.tabs(["Predicciones", "Historial", "Modelos", "Datos"])
     with page_tabs[0]:
         recommendations_view()
     with page_tabs[1]:
-        models_view()
+        history_view()
     with page_tabs[2]:
+        models_view()
+    with page_tabs[3]:
         data_view()
+
+
+def finished_pick_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    if rows.empty or "Resultado pick" not in rows.columns:
+        return rows
+    return rows[rows["Resultado pick"].isin(["check", "cross", "void"])].copy()
+
+
+def result_counts(rows: pd.DataFrame) -> tuple[int, int, int]:
+    if rows.empty or "Resultado pick" not in rows.columns:
+        return 0, 0, 0
+    green = int((rows["Resultado pick"] == "check").sum())
+    red = int((rows["Resultado pick"] == "cross").sum())
+    void = int((rows["Resultado pick"] == "void").sum())
+    return green, red, void
+
+
+def accuracy_pct(rows: pd.DataFrame) -> float | None:
+    green, red, _ = result_counts(rows)
+    settled = green + red
+    return (green / settled) if settled else None
+
+
+def pick_profit(result: object, odds: object, stake: float = 1.0) -> float:
+    marker = str(result or "").strip().lower()
+    if marker == "void":
+        return 0.0
+    if marker == "check":
+        value = pd.to_numeric(pd.Series([odds]), errors="coerce").iloc[0]
+        return float((value - 1) * stake) if pd.notna(value) else 0.0
+    if marker == "cross":
+        return -stake
+    return 0.0
+
+
+def format_units(value: float | int | None) -> str:
+    if pd.isna(value):
+        return ""
+    return f"{value:+.2f} u"
+
+
+def parlay_result(rows: pd.DataFrame) -> str:
+    if rows.empty or "Resultado pick" not in rows.columns:
+        return ""
+    settled = rows[rows["Resultado pick"].isin(["check", "cross"])]
+    if settled.empty:
+        return ""
+    if (settled["Resultado pick"] == "cross").any():
+        return "cross"
+    return "check"
+
+
+def build_daily_parlay_history(market_rows: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if market_rows.empty or "fecha_hora_local" not in market_rows.columns:
+        return pd.DataFrame(), pd.DataFrame()
+    day_values = sorted(pd.to_datetime(market_rows["fecha_hora_local"], errors="coerce").dt.date.dropna().unique())
+    parlay_frames = []
+    summary_rows = []
+    for day_value in day_values:
+        day_parlay = suggested_parlay(market_rows, day_value)
+        if day_parlay.empty:
+            continue
+        result = parlay_result(day_parlay)
+        day_parlay = day_parlay.copy()
+        day_parlay["Dia"] = day_value.isoformat()
+        day_parlay["Resultado combinada"] = result
+        parlay_frames.append(day_parlay)
+        summary_rows.append(
+            {
+                "Dia": day_value.isoformat(),
+                "Resultado pick": result,
+                "Picks": len(day_parlay),
+                "Cuota combinada": day_parlay["Cuota"].prod(),
+                "Stake": PARLAY_STAKE_UNITS,
+                "Ganancia": pick_profit(result, day_parlay["Cuota"].prod(), PARLAY_STAKE_UNITS),
+                "Detalle": " + ".join(f"{row['Jugador']} ({row['Mercado']})" for _, row in day_parlay.iterrows()),
+            }
+        )
+    details = pd.concat(parlay_frames, ignore_index=True) if parlay_frames else pd.DataFrame()
+    return pd.DataFrame(summary_rows), details
+
+
+def build_moneyline_history_rows(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for _, match in df.iterrows():
+        prob_j1 = match.get("prob_modelo_j1")
+        prob_j2 = match.get("prob_modelo_j2")
+        if pd.isna(prob_j1) and pd.isna(prob_j2):
+            continue
+        side = 1 if pd.notna(prob_j1) and (pd.isna(prob_j2) or prob_j1 >= prob_j2) else 2
+        player = match.get(f"jugador_{side}")
+        rows.append(
+            {
+                "fecha_hora_local": match.get("fecha_hora_local"),
+                "Fecha local": match.get("fecha_local"),
+                "Ronda historial": match.get("Ronda historial"),
+                "Hora": match.get("start_raw"),
+                "Partido": f"{match.get('jugador_1')} vs {match.get('jugador_2')}",
+                "Grupo": "Match winner",
+                "Mercado": f"J{side} gana partido",
+                "Jugador": player,
+                "Prob. modelo": match.get(f"prob_modelo_j{side}"),
+                "Cuota": match.get(f"odds{side}_avg"),
+                "Prob. cuota": match.get(f"prob_mercado_j{side}"),
+                "Edge": match.get(f"edge_j{side}"),
+                "Kelly": match.get(f"kelly_j{side}"),
+                "Resultado pick": evaluate_pick(match, "Match winner", f"J{side} gana partido", player),
+                "Ganador": match.get("winner"),
+                "Score": match.get("score"),
+            }
+        )
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out["Stake"] = MONEYLINE_STAKE_UNITS
+        out["Ganancia"] = out.apply(lambda row: pick_profit(row["Resultado pick"], row["Cuota"], MONEYLINE_STAKE_UNITS), axis=1)
+    return out
+
+
+def history_view() -> None:
+    target = load_target_config()
+    history = load_historical_predictions(target)
+    raw_results = load_historical_raw_results(target)
+    if history.empty and raw_results.empty:
+        st.info("Todavia no hay rondas anteriores disponibles para este target.")
+        return
+
+    prediction_match_ids = set(history["match_id"].astype(str)) if not history.empty and "match_id" in history.columns else set()
+    missing_prediction_results = raw_results[~raw_results["match_id"].astype(str).isin(prediction_match_ids)].copy() if not raw_results.empty else pd.DataFrame()
+
+    market_rows = build_market_rows(history)
+    moneyline_rows = build_moneyline_history_rows(history)
+    moneyline_rows = finished_pick_rows(moneyline_rows)
+    parlay_summary, parlay_details = build_daily_parlay_history(market_rows)
+
+    green, red, void = result_counts(moneyline_rows)
+    parlay_green, parlay_red, parlay_void = result_counts(parlay_summary)
+    ml_profit = moneyline_rows["Ganancia"].sum() if "Ganancia" in moneyline_rows.columns and not moneyline_rows.empty else 0
+    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+    c1.metric("Partidos jugados", len(raw_results))
+    c2.metric("Con prediccion", len(history))
+    c3.metric("Picks ML cerrados", len(moneyline_rows))
+    c4.metric("Verdes ML", green)
+    c5.metric("Rojos ML", red)
+    c6.metric("Acierto ML", format_pct(accuracy_pct(moneyline_rows)))
+    c7.metric("Ganancia ML", format_units(ml_profit))
+
+    hist_tabs = st.tabs(["Moneyline", "Combinadas", "Cobertura"])
+    with hist_tabs[0]:
+        if moneyline_rows.empty:
+            st.info("No hay picks moneyline cerrados con los filtros actuales.")
+        else:
+            round_options = ["Todas", *sorted(moneyline_rows["Ronda historial"].dropna().unique())] if "Ronda historial" in moneyline_rows.columns else ["Todas"]
+            selected_round = st.selectbox("Ronda", round_options, key="history_ml_round")
+            display_rows = moneyline_rows
+            if selected_round != "Todas":
+                display_rows = display_rows[display_rows["Ronda historial"] == selected_round]
+            columns = ["Resultado pick", "Ronda historial", "Fecha local", "Partido", "Mercado", "Jugador", "Prob. modelo", "Cuota", "Stake", "Ganancia", "Prob. cuota", "Edge", "Ganador", "Score"]
+            table = sort_table_controls(display_rows[[col for col in columns if col in display_rows.columns]], "history_ml_table", "Fecha local")
+            st.dataframe(style_market_table(table), use_container_width=True, hide_index=True)
+
+    with hist_tabs[1]:
+        parlay_profit = parlay_summary["Ganancia"].sum() if "Ganancia" in parlay_summary.columns and not parlay_summary.empty else 0
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Combinadas cerradas", len(parlay_summary))
+        c2.metric("Verdes", parlay_green)
+        c3.metric("Rojos", parlay_red)
+        c4.metric("Acierto", format_pct(accuracy_pct(parlay_summary)))
+        c5.metric("Ganancia", format_units(parlay_profit))
+        if parlay_summary.empty:
+            st.info("No hubo combinadas recomendadas en las rondas cerradas con los filtros actuales.")
+        else:
+            summary_table = sort_table_controls(parlay_summary, "history_parlay_summary", "Dia")
+            st.dataframe(style_market_table(summary_table), use_container_width=True, hide_index=True)
+            with st.expander("Detalle de picks por combinada"):
+                detail_columns = ["Resultado combinada", "Resultado pick", "Dia", "Fecha local", "Partido", "Grupo", "Mercado", "Jugador", "Prob. modelo", "Cuota", "Edge", "Ganador", "Score"]
+                detail_table = sort_table_controls(parlay_details[[col for col in detail_columns if col in parlay_details.columns]], "history_parlay_detail", "Dia")
+                st.dataframe(style_market_table(detail_table), use_container_width=True, hide_index=True)
+
+    with hist_tabs[2]:
+        if missing_prediction_results.empty:
+            st.info("Todas las filas de resultados historicos tienen prediccion asociada.")
+        else:
+            st.warning("Hay partidos jugados sin prediccion asociada; cuentan como resultado del torneo, pero no como verde/rojo del modelo.")
+            coverage_columns = {
+                "Ronda historial": "Ronda",
+                "result_date": "Fecha",
+                "player1": "Jugador 1",
+                "player2": "Jugador 2",
+                "winner": "Ganador",
+                "score": "Score",
+            }
+            st.dataframe(friendly_table(missing_prediction_results, coverage_columns), use_container_width=True, hide_index=True)
 
 
 def recommendations_view() -> None:

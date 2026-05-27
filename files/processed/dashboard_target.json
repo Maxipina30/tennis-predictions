@@ -1,10 +1,10 @@
 {
-  "label": "Roland Garros 1R",
+  "label": "Roland Garros 2R",
   "tournament": "French Open",
-  "round": "1R",
-  "predictions_file": "files/processed/grand_slam_moneyline/model_training/roland_garros_1r_predictions.csv",
-  "upcoming_file": "files/processed/roland_garros_1r/upcoming_matches.csv",
-  "local_reference_date": "2026-05-25",
+  "round": "2R",
+  "predictions_file": "files/processed/grand_slam_moneyline/model_training/roland_garros_2r_predictions.csv",
+  "upcoming_file": "files/processed/roland_garros_2r/upcoming_matches.csv",
+  "local_reference_date": "2026-05-27",
   "raw_today_offset_days": 0,
   "raw_tomorrow_offset_days": 1,
   "rankings_file": "files/processed/atp_rankings/player_ranking_history.csv"

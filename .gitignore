@@ -23,6 +23,7 @@ files/processed/**
 !files/processed/model_dataset_2025_2026/split_summary.json
 !files/processed/model_dataset_2025_2026/test_rome_3r_upcoming.csv
 !files/processed/model_dataset_2025_2026/test_rome_r16_upcoming.csv
+!files/processed/model_dataset_2025_2026/test_roland_garros_2r_upcoming.csv
 !files/processed/model_training_2025_2026/
 !files/processed/model_training_2025_2026/metrics.csv
 !files/processed/model_training_2025_2026/madrid_predictions.csv
@@ -31,6 +32,19 @@ files/processed/**
 !files/processed/model_training_2025_2026/rome_3r_predictions.csv
 !files/processed/model_training_2025_2026/rome_r16_predictions.csv
 !files/processed/dashboard_target.json
+!files/processed/grand_slam_moneyline/
+!files/processed/grand_slam_moneyline/model_training/
+!files/processed/grand_slam_moneyline/model_training/roland_garros_1r_predictions.csv
+!files/processed/grand_slam_moneyline/model_training/roland_garros_2r_predictions.csv
+!files/processed/roland_garros_1r/
+!files/processed/roland_garros_1r/match_results.csv
+!files/processed/roland_garros_1r/upcoming_matches.csv
+!files/processed/roland_garros_1r/upcoming_match_details.csv
+!files/processed/roland_garros_1r/tournament_metadata.json
+!files/processed/roland_garros_2r/
+!files/processed/roland_garros_2r/upcoming_matches.csv
+!files/processed/roland_garros_2r/upcoming_match_details.csv
+!files/processed/roland_garros_2r/tournament_metadata.json
 !files/processed/roma_1r/
 !files/processed/roma_1r/upcoming_matches.csv
 !files/processed/roma_1r/upcoming_match_details.csv
