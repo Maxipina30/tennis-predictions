@@ -442,6 +442,13 @@ def load_historical_predictions(target: dict) -> pd.DataFrame:
         frame = frame.copy()
         frame["Ronda historial"] = config.get("round")
         frames.append(frame)
+    current_frame = load_prediction_frame(target)
+    if not current_frame.empty and "result_date" in current_frame.columns:
+        result_dates = pd.to_datetime(current_frame["result_date"], errors="coerce")
+        current_frame = current_frame[result_dates.notna()].copy()
+        if not current_frame.empty:
+            current_frame["Ronda historial"] = target.get("round")
+            frames.append(current_frame)
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
@@ -458,6 +465,13 @@ def load_historical_raw_results(target: dict) -> pd.DataFrame:
         frame["match_id"] = frame["match_id"].astype(str)
         frame["Ronda historial"] = config.get("round")
         frames.append(frame)
+    current_path = target["upcoming_path"].with_name("match_results.csv")
+    current_frame = read_csv(current_path)
+    if not current_frame.empty:
+        current_frame = current_frame.copy()
+        current_frame["match_id"] = current_frame["match_id"].astype(str)
+        current_frame["Ronda historial"] = target.get("round")
+        frames.append(current_frame)
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
