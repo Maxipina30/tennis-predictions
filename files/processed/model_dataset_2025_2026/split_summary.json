@@ -1,13 +1,13 @@
 {
   "train_rows": 3426,
   "test_completed_rows": 70,
-  "test_upcoming_rows": 31,
-  "test_upcoming_output": "test_roland_garros_2r_upcoming.csv",
+  "test_upcoming_rows": 16,
+  "test_upcoming_output": "test_roland_garros_3r_upcoming.csv",
   "test_upcoming_tournament": "French Open",
-  "test_upcoming_round": "2R",
+  "test_upcoming_round": "3R",
   "test_upcoming_today_offset_days": 0,
   "test_upcoming_tomorrow_offset_days": 1,
-  "test_total_rows": 101,
+  "test_total_rows": 86,
   "test_completed_tournaments": [
     "Barcelona",
     "Madrid",
