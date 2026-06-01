@@ -38,6 +38,7 @@ files/processed/**
 !files/processed/grand_slam_moneyline/model_training/roland_garros_1r_predictions.csv
 !files/processed/grand_slam_moneyline/model_training/roland_garros_2r_predictions.csv
 !files/processed/grand_slam_moneyline/model_training/roland_garros_3r_predictions.csv
+!files/processed/grand_slam_moneyline/model_training/roland_garros_4r_predictions.csv
 !files/processed/roland_garros_1r/
 !files/processed/roland_garros_1r/match_results.csv
 !files/processed/roland_garros_1r/upcoming_matches.csv
@@ -53,6 +54,10 @@ files/processed/**
 !files/processed/roland_garros_3r/upcoming_matches.csv
 !files/processed/roland_garros_3r/upcoming_match_details.csv
 !files/processed/roland_garros_3r/tournament_metadata.json
+!files/processed/roland_garros_4r/
+!files/processed/roland_garros_4r/match_results.csv
+!files/processed/roland_garros_4r/upcoming_matches.csv
+!files/processed/roland_garros_4r/upcoming_match_details.csv
 !files/processed/roma_1r/
 !files/processed/roma_1r/upcoming_matches.csv
 !files/processed/roma_1r/upcoming_match_details.csv

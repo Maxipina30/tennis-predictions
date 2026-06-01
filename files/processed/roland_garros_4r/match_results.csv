@@ -1,0 +1,5 @@
+match_id,player1,player2,winner,result_date,start_raw,score,sets_player1,sets_player2,odds1_avg,odds2_avg,retired,source_url
+3218747,De Jong,Zverev,Zverev,2026-05-31,31.05. 11:00,"6-7(3), 4-6, 1-6",0,3,,,false,https://www.bbc.co.uk/sport/tennis/french-open/mens-singles/scores-and-schedule
+3218631,Jodar,Carreno-Busta,Jodar,2026-05-31,31.05. 11:00,"4-6, 4-6, 6-1, 6-2, 6-2",3,2,1.2,4.5,false,https://wtop.com/sports/2026/05/french-open-results-8/
+3218727,Mensik,Rublev,Mensik,2026-05-31,31.05. 16:00,"6-3, 7-6(6), 4-6, 2-6, 6-3",3,2,2.0,1.78,false,https://www.bbc.co.uk/sport/tennis/french-open/mens-singles/scores-and-schedule
+3218741,Ruud,Fonseca,Fonseca,2026-05-31,31.05. 20:15,"5-7, 6-7(8), 7-5, 2-6",1,3,1.61,2.27,false,https://ge.globo.com/tenis/noticia/2026/05/31/fonseca-brilha-outra-vez-bate-ruud-e-vai-as-quartas-de-roland-garros-sob-aplausos-de-guga.ghtml
