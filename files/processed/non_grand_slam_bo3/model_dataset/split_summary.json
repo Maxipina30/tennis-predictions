@@ -1,0 +1,18 @@
+{
+  "bo3_match_rows": 2803,
+  "train_rows": 2735,
+  "test_rows": 68,
+  "categories": [
+    "atp_250",
+    "atp_500",
+    "masters_1000"
+  ],
+  "train_before": "2026-04-13",
+  "test_from": "2026-04-13",
+  "test_tournaments": [
+    "Barcelona",
+    "Madrid",
+    "Munich"
+  ],
+  "target": "moneyline_and_bo3_set_markets"
+}

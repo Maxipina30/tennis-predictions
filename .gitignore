@@ -77,6 +77,15 @@ files/processed/**
 !files/processed/model_training_2026/
 !files/processed/model_training_2026/metrics.csv
 !files/processed/model_training_2026/madrid_predictions.csv
+!files/processed/non_grand_slam_bo3/
+!files/processed/non_grand_slam_bo3/model_dataset/
+!files/processed/non_grand_slam_bo3/model_dataset/split_summary.json
+!files/processed/non_grand_slam_bo3/model_training/
+!files/processed/non_grand_slam_bo3/model_training/metrics.csv
+!files/processed/non_grand_slam_bo3/model_training/stuttgart_hertogenbosch_1r_predictions.csv
+!files/processed/stuttgart_hertogenbosch_1r/
+!files/processed/stuttgart_hertogenbosch_1r/upcoming_matches.csv
+!files/processed/stuttgart_hertogenbosch_1r/upcoming_match_details.csv
 !files/processed/player_histories_2024_2026/
 !files/processed/player_histories_2024_2026/player_history_summary.json
 !files/processed/temporal_validation_2026/

@@ -1,11 +1,18 @@
 {
-  "label": "Roland Garros R16",
-  "tournament": "French Open",
-  "round": "4R",
-  "predictions_file": "files/processed/grand_slam_moneyline/model_training/roland_garros_4r_predictions.csv",
-  "upcoming_file": "files/processed/roland_garros_4r/upcoming_matches.csv",
-  "local_reference_date": "2026-06-01",
+  "label": "Stuttgart + Hertogenbosch 1R",
+  "tournament": null,
+  "round": "1R",
+  "predictions_file": "files/processed/non_grand_slam_bo3/model_training/stuttgart_hertogenbosch_1r_predictions.csv",
+  "upcoming_file": "files/processed/stuttgart_hertogenbosch_1r/upcoming_matches.csv",
+  "local_reference_date": "2026-06-08",
   "raw_today_offset_days": 0,
   "raw_tomorrow_offset_days": 1,
-  "rankings_file": "files/processed/atp_rankings/player_ranking_history.csv"
+  "rankings_file": "files/processed/atp_rankings/player_ranking_history.csv",
+  "model_data_dir": "files/processed/non_grand_slam_bo3/model_dataset",
+  "training_dir": "files/processed/non_grand_slam_bo3/model_training",
+  "model_label": "ATP BO3 no Grand Slam",
+  "market_profile": "non_grand_slam_bo3",
+  "excluded_match_ids": [
+    "3229483"
+  ]
 }
